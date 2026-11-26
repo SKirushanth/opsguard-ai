@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: opsguard-monitoring
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: python -m backend.app.main
+    healthCheckPath: /healthz
+    disk:
+      name: opsguard-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATABASE_PATH
+        value: /var/data/opsguard.sqlite3
+      - key: OPERATOR_PASSWORD
+        generateValue: true
+      - key: PROTECT_READS
+        value: "true"
+      - key: MONITORING_API_KEY
+        generateValue: true
+      # Set CORS_ORIGINS, AGENT_CHAT_URL and AGENT_API_KEY after the
+      # frontend origin and hosted agent invocation URL have been issued.
