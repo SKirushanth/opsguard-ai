@@ -319,3 +319,10 @@ def test_external_errors(client, auth, approved, monkeypatch, code, body):
     result = client.post("/api/applications/" + item["id"] + "/validate", headers=auth)
     assert result.status_code == 502
     assert "private failure details" not in result.text
+
+
+def test_simple_health_endpoint():
+    result = external.parse_health(b'{"status":"ok","db":"connected","items":3}', "cafe-api")
+    assert result.service_id == "cafe-api"
+    assert result.status == "healthy"
+    assert result.http_status == 200

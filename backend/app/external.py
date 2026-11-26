@@ -131,7 +131,10 @@ async def fetch_external(app: dict, resource: str):
                             502, "External monitoring response exceeded 64 KiB."
                         )
                     data.extend(chunk)
-        result = SCHEMAS[resource].model_validate_json(bytes(data))
+        if resource == "health":
+            result = parse_health(bytes(data), app["local_id"])
+        else:
+            result = SCHEMAS[resource].model_validate_json(bytes(data))
         if result.service_id != app["local_id"]:
             raise HTTPException(
                 502, "External monitoring returned a different service ID."
@@ -146,3 +149,15 @@ async def fetch_external(app: dict, resource: str):
         raise HTTPException(
             502, "External monitoring failed or returned incompatible JSON."
         ) from exc
+
+
+def parse_health(data: bytes, service_id: str) -> ServiceHealth:
+    payload = json.loads(data)
+    # Preserve strict validation for services advertising the OpsGuard contract.
+    if isinstance(payload, dict) and not {"service_id", "http_status", "message"}.intersection(payload):
+        reported = payload.get("status")
+        statuses = {"ok": "healthy", "degraded": "degraded", "error": "down"}
+        if isinstance(reported, str) and reported in statuses:
+            return ServiceHealth(service_id=service_id, status=statuses[reported], http_status=200,
+                                 message=f"Health endpoint reports '{reported}'.")
+    return ServiceHealth.model_validate_json(data)

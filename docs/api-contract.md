@@ -223,6 +223,11 @@ The sample hostname is illustrative. The operator must explicitly allow the real
 
 ## External monitoring contract
 
+For a simple health endpoint, OpsGuard also accepts HTTP 200 with a JSON object containing
+`"status":"ok"`, `"degraded"`, or `"error"` and no OpsGuard-specific fields. These map
+to healthy, degraded and down. The registration supplies the service ID. Extra fields are
+ignored, and the message describes only the endpoint's reported status.
+
 Return HTTP 200 with an uncompressed JSON body describing the observation, including when reporting that a monitored service is down. Use the registered upstream service ID; the backend substitutes the namespaced identifier when forwarding. Provide timezone-aware timestamps and a health status of healthy, degraded or down. Each endpoint is read with GET. The response bodies below are three separate examples.
 
 ```json
