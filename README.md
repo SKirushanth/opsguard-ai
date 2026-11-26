@@ -42,7 +42,9 @@ if (!(Test-Path .env)) { Copy-Item .env.example .env }
 npm.cmd ci --prefix frontend
 ```
 
-Set `OPERATOR_PASSWORD` in the root `.env` to a strong random password. Set `LLM_API_KEY`, `LLM_MODEL` and `LLM_BASE_URL` for a provider with OpenAI-compatible Chat Completions and function calling. Start each process in its own terminal, from the repository root.
+Set `OPERATOR_PASSWORD` in the root `.env` to a strong random password. Set `LLM_API_KEY`, `LLM_MODEL` and `LLM_BASE_URL` for a provider with OpenAI-compatible Chat Completions and function calling. On Windows, run `.\start.ps1` from the repository root to start all three servers in one terminal. Press Ctrl+C to stop them together.
+
+To start each process in its own terminal, run these commands from the repository root.
 
 ```powershell
 .\.venv\Scripts\python.exe -m backend.app.main
