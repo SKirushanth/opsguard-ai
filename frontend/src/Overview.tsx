@@ -1,6 +1,6 @@
 import {
   Activity,
-  Boxes,
+  Network,
   CircleCheck,
   TriangleAlert,
   CircleX,
@@ -44,7 +44,7 @@ export function Overview(p: Props) {
   const stats = [
     {
       label: "Monitored services",
-      icon: Boxes,
+      icon: Network,
       value: p.services.length,
       kind: "total",
     },
@@ -121,13 +121,13 @@ export function Overview(p: Props) {
                   <td>
                     <Status value={s.status} />
                   </td>
-                  <td>
+                  <td className={s.metrics.data ? undefined : "unavailable"}>
                     {s.metrics.data
                       ? s.metrics.data.metrics.avg_latency_ms.toLocaleString() +
                         " ms"
                       : "Unavailable"}
                   </td>
-                  <td>
+                  <td className={s.metrics.data ? undefined : "unavailable"}>
                     {s.metrics.data
                       ? s.metrics.data.metrics.error_rate_percent + "%"
                       : "Unavailable"}
@@ -149,7 +149,7 @@ export function Overview(p: Props) {
         <header>
           <div>
             <h2>Recent logs</h2>
-            <p>Latest available entries across this application</p>
+            <p>Latest available entries across this application.</p>
           </div>
           <Activity size={20} />
         </header>

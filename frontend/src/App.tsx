@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 import {
   Activity,
-  Boxes,
+  Network,
+  CircleCheck,
+  LoaderCircle,
   ChevronRight,
   CircleUserRound,
   ClipboardList,
@@ -27,6 +29,8 @@ import {
 import { Overview, Details } from "./Overview";
 import { Investigator } from "./Investigator";
 import { History } from "./History";
+import { Dropdown } from "./Dropdown";
+import { OperatorDialog } from "./OperatorDialog";
 import { Applications } from "./Applications";
 
 const navigation = [
@@ -227,7 +231,7 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className="identity">
+        <div className="identity" key={operator ? "operator" : "guest"}>
           <CircleUserRound />
           <div>
             <strong>{operator ? "Operator" : "Guest access"}</strong>
@@ -245,15 +249,24 @@ export default function App() {
             {page}
           </div>
           <button
+            className={operator ? "sessionButton active" : "sessionButton"}
+            aria-label={operator ? "Sign out" : "Operator sign-in"}
+            title={operator ? "Sign out" : undefined}
             disabled={busy}
             onClick={() => (operator ? void logout() : setShowLogin((v) => !v))}
           >
-            {operator ? <LogOut /> : <ShieldCheck />}
-            {operator ? "Sign out" : "Operator sign-in"}
+            <ShieldCheck />
+            {operator ? (
+              <>
+                Operator <LogOut />
+              </>
+            ) : (
+              "Operator sign-in"
+            )}
           </button>
         </div>
         <div className="content">
-          {showLogin && (
+          <OperatorDialog open={showLogin} dismiss={() => setShowLogin(false)}>
             <form
               className="login"
               onSubmit={(e) => {
@@ -264,6 +277,10 @@ export default function App() {
                 void login(password);
               }}
             >
+              <span className="dialogIcon">
+                <ShieldCheck />
+              </span>
+              <h2 id="operator-title">Operator sign-in</h2>
               <label>
                 Operator password
                 <input
@@ -274,14 +291,26 @@ export default function App() {
                   autoFocus
                 />
               </label>
-              <button className="primary" disabled={busy}>
-                Sign in
+              {error && (
+                <p role="alert" className="error">
+                  {error}
+                </p>
+              )}
+              <button className="primary" disabled={busy || !showLogin}>
+                {busy ? (
+                  <>
+                    <LoaderCircle className="spin" /> Verifying operator
+                    credentials...
+                  </>
+                ) : (
+                  "Sign in"
+                )}
               </button>
               <button type="button" onClick={() => setShowLogin(false)}>
                 Cancel
               </button>
             </form>
-          )}
+          </OperatorDialog>
           <header className="pageHead">
             <div>
               <h1>
@@ -303,21 +332,20 @@ export default function App() {
                         : "Inspect the latest evidence for a service."}
               </p>
             </div>
-            <button
-              onClick={refresh}
-              disabled={loading}
-              aria-label="Refresh monitoring data"
-            >
-              <RefreshCw />
-              Refresh
-            </button>
           </header>
-          {notice && (
-            <p role="status" className="notice">
-              {notice}
+          {operator && notice === "Signed in as workspace operator." ? (
+            <p className="operatorToast" role="status">
+              <CircleCheck />
+              Operator session active<span className="sr-only">{notice}</span>
             </p>
+          ) : (
+            notice && (
+              <p role="status" className="notice">
+                {notice}
+              </p>
+            )
           )}
-          {error && (
+          {error && !showLogin && (
             <p role="alert" className="error">
               {error}
             </p>
@@ -332,43 +360,39 @@ export default function App() {
               Loading monitoring data…
             </p>
           )}
-          {!["Applications", "Incidents"].includes(page) && app && (
-            <div className="contextBar">
-              <label>
-                <Boxes />
-                Application
-                <select
-                  aria-label="Selected application"
+          <div className="controlBar">
+            {!["Applications", "Incidents"].includes(page) && app && (
+              <div className="contextBar">
+                <Dropdown
+                  label="Application"
+                  icon={<Network />}
+                  options={apps}
                   value={appId}
-                  onChange={(e) => selectApp(e.target.value)}
-                >
-                  {apps.map((a) => (
-                    <option value={a.id} key={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <span className="source">
-                {app.id === "demo" ? "Simulated data" : "External API"}
-              </span>
-              {page !== "Dashboard" && service && (
-                <label>
-                  Service
-                  <select
+                  onChange={selectApp}
+                />
+                <span className="source">
+                  {app.id === "demo" ? "Simulated data" : "External API"}
+                </span>
+                {page !== "Dashboard" && service && (
+                  <Dropdown
+                    label="Service"
+                    options={services}
                     value={service.id}
-                    onChange={(e) => setServiceId(e.target.value)}
-                  >
-                    {services.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-            </div>
-          )}
+                    onChange={setServiceId}
+                  />
+                )}
+              </div>
+            )}
+            <button
+              className="refresh"
+              onClick={refresh}
+              disabled={loading}
+              aria-label="Refresh monitoring data"
+            >
+              <RefreshCw />
+              Refresh
+            </button>
+          </div>
           {page === "Dashboard" &&
             props &&
             !loadError &&
