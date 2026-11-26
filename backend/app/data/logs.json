@@ -1,0 +1,63 @@
+{
+  "auth": [
+    {
+      "timestamp": "2026-11-23T10:00:03Z",
+      "level": "INFO",
+      "message": "Login completed successfully"
+    },
+    {
+      "timestamp": "2026-11-23T10:01:12Z",
+      "level": "INFO",
+      "message": "Session token refreshed"
+    },
+    {
+      "timestamp": "2026-11-23T10:02:08Z",
+      "level": "INFO",
+      "message": "Authentication health probe passed"
+    }
+  ],
+  "orders": [
+    {
+      "timestamp": "2026-11-23T10:00:00Z",
+      "level": "ERROR",
+      "message": "Database connection pool exhausted: 100 of 100 connections in use"
+    },
+    {
+      "timestamp": "2026-11-23T10:00:05Z",
+      "level": "ERROR",
+      "message": "Failed to create order: database connection timeout after 2000 ms"
+    },
+    {
+      "timestamp": "2026-11-23T10:00:11Z",
+      "level": "ERROR",
+      "message": "Database connection unavailable for order processing"
+    },
+    {
+      "timestamp": "2026-11-23T10:00:18Z",
+      "level": "ERROR",
+      "message": "Database connection timeout waiting for an available pool connection"
+    },
+    {
+      "timestamp": "2026-11-23T10:00:19Z",
+      "level": "ERROR",
+      "message": "HTTP 503 returned for POST /orders because the database connection was unavailable"
+    }
+  ],
+  "notifications": [
+    {
+      "timestamp": "2026-11-23T10:00:07Z",
+      "level": "INFO",
+      "message": "Email dispatched successfully"
+    },
+    {
+      "timestamp": "2026-11-23T10:01:14Z",
+      "level": "INFO",
+      "message": "Notification queued for delivery"
+    },
+    {
+      "timestamp": "2026-11-23T10:02:05Z",
+      "level": "INFO",
+      "message": "Notification processed and delivery acknowledged"
+    }
+  ]
+}

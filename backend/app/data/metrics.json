@@ -1,0 +1,19 @@
+{
+  "auth": {
+    "error_rate_percent": 0.5,
+    "avg_latency_ms": 80,
+    "requests_last_5m": 350
+  },
+  "orders": {
+    "error_rate_percent": 42.0,
+    "avg_latency_ms": 2400,
+    "requests_last_5m": 120,
+    "active_db_connections": 100,
+    "db_connection_limit": 100
+  },
+  "notifications": {
+    "error_rate_percent": 1.0,
+    "avg_latency_ms": 120,
+    "requests_last_5m": 200
+  }
+}

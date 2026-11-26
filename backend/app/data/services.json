@@ -1,0 +1,23 @@
+[
+  {
+    "id": "auth",
+    "name": "Authentication Service",
+    "status": "healthy",
+    "http_status": 200,
+    "message": "Authentication requests are succeeding"
+  },
+  {
+    "id": "orders",
+    "name": "Order Service",
+    "status": "down",
+    "http_status": 503,
+    "message": "Order processing is unavailable"
+  },
+  {
+    "id": "notifications",
+    "name": "Notification Service",
+    "status": "healthy",
+    "http_status": 200,
+    "message": "Notification processing and email dispatch are operational"
+  }
+]
