@@ -1,0 +1,5 @@
+-r ../backend/requirements.txt
+langchain-core>=1,<2
+langchain-openai>=1,<2
+langgraph>=1,<2
+openai>=2,<3
