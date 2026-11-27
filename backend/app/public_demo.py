@@ -121,7 +121,9 @@ async def analysis(payload: ChatRequest, request: Request, state=Depends(visitor
 
 @router.post("/analysis/local")
 async def local_analysis(payload: ChatRequest, state=Depends(visitor)):
-    return {"session_id": payload.session_id, "mode": "demo", "response": Evidence.collect(payload.service_id, observations(payload.service_id, state), []).render(None)}
+    evidence = Evidence.collect(payload.service_id, observations(payload.service_id, state), [])
+    content = evidence.conversation(None, payload.message) if payload.conversational else {"response": evidence.render(None)}
+    return {"session_id": payload.session_id, "mode": "demo", **content}
 
 
 def draft_for(payload, state):

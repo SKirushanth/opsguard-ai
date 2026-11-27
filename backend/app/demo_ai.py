@@ -11,8 +11,9 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
-from investigation import Evidence, Investigation, REFERENCE_FORMAT
+from investigation import Evidence, Investigation
 from .access import matches
+from .routes.chat import investigation_context
 
 router = APIRouter(prefix="/api/services")
 logger = logging.getLogger("uvicorn.error").getChild("demo_ai")
@@ -56,9 +57,13 @@ async def tool_read(snapshot_id: str, resource: Literal["health", "logs", "metri
 
 async def investigate(request, payload, session, observations):
     ev = Evidence.collect(payload.service_id, observations, [])
+    def reply_for(mode, selection=None):
+        content = ev.conversation(selection, payload.message) if payload.conversational else {"response": ev.render(selection)}
+        return {"session_id": payload.session_id, "mode": mode, **content}
+
     def fallback(reason: str):
         logger.info("demo_ai_fallback reason=%s", reason)
-        return {"session_id": payload.session_id, "mode": "demo", "response": ev.render(None)}
+        return reply_for("demo")
 
     key = os.getenv("AGENT_API_KEY")
     url = request.app.state.agent_chat_url
@@ -75,7 +80,7 @@ async def investigate(request, payload, session, observations):
         async with asyncio.timeout(60):
             reply = await request.app.state.agent_client.post(url, headers={"X-API-Key":key}, json={
                 "message":payload.message, "session_id":secrets.token_hex(16),
-                "context":{"service_id":alias, "response_format":REFERENCE_FORMAT},
+                "context":investigation_context(payload, alias),
             })
         reply.raise_for_status()
         receipt = Investigation.model_validate_json(reply.json()["response"])
@@ -88,7 +93,7 @@ async def investigate(request, payload, session, observations):
             return fallback("missing_selection")
         if not verified.accepts(receipt.selection):
             return fallback("unsupported_selection")
-        return {"session_id":payload.session_id, "mode":"live", "response":ev.render(receipt.selection)}
+        return reply_for("live", receipt.selection)
     except httpx.HTTPStatusError as exc:
         return fallback(f"agent_http_{exc.response.status_code}")
     except (httpx.TimeoutException, TimeoutError):

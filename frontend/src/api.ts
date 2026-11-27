@@ -177,6 +177,7 @@ export const incident = draft.extend({
 export type Incident = z.infer<typeof incident>;
 export const chatReply = z.object({
   mode: z.enum(["demo", "live"]).optional(),
+  evidence: z.array(z.object({ reference: z.string(), text: z.string() })).optional(),
   response: z.string().min(1),
   session_id: z.string(),
 });

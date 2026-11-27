@@ -95,7 +95,11 @@ it("investigates, reviews a draft, and saves only after explicit confirmation", 
         },
       });
     if (path === "/api/chat")
-      return ok({ response: "Observed **HTTP 503**.", session_id: "chat" });
+      return ok({
+        response: "The latest health check reports that the service is down.",
+        session_id: "chat",
+        evidence: [{ reference: "health.http", text: "HTTP 503" }],
+      });
     if (path.endsWith("/draft")) return ok(report);
     if (path === "/api/incidents" && init.method === "POST") {
       writes.push(JSON.parse(String(init.body)));
@@ -117,9 +121,11 @@ it("investigates, reviews a draft, and saves only after explicit confirmation", 
   fireEvent.click(
     screen.getByRole("button", { name: "Why is Order Service failing?" }),
   );
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Prepare incident draft" }),
-  );
+  const evidence = await screen.findByText("Supporting evidence (1)");
+  expect(evidence.closest("details")?.open).toBe(false);
+  fireEvent.click(evidence);
+  expect(evidence.closest("details")?.open).toBe(true);
+  fireEvent.click(await screen.findByRole("button", { name: "Prepare incident draft" }));
   expect(
     await screen.findByRole("heading", { name: "Review incident draft" }),
   ).toBeTruthy();

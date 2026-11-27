@@ -34,7 +34,7 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "agent"
 
-from investigation import REFERENCE_FORMAT, Investigation
+from investigation import CONVERSATIONAL_FORMAT, REFERENCE_FORMAT, Investigation
 
 from .config import load_settings
 from .graph import InvalidModelResponse, build_graph
@@ -99,6 +99,13 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
 
     service_id = payload.context.get("service_id")
     message = payload.message
+    conversational = payload.context.get("answer_format") == CONVERSATIONAL_FORMAT
+    if conversational:
+        history = payload.context.get("previous_questions")
+        if isinstance(history, list):
+            previous = [item[:500] for item in history[-3:] if isinstance(item, str)]
+            if previous:
+                message = f"Latest question: {message}\nEarlier questions for context: {previous}"
     if service_id is not None:
         if not isinstance(service_id, str) or not re.fullmatch(
             r"[a-z][a-z0-9-]{0,63}", service_id
@@ -111,7 +118,11 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 {"messages": [HumanMessage(content=message)]},
                 config={
                     "recursion_limit": 12,
-                    "configurable": {"service_id": service_id, "draft": payload.message.startswith("Prepare an incident draft.")},
+                    "configurable": {
+                        "service_id": service_id,
+                        "draft": payload.message.startswith("Prepare an incident draft."),
+                        "conversational": conversational,
+                    },
                 },
             )
         answer = result["messages"][-1].text.strip()
@@ -149,7 +160,10 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     receipt = result["messages"][-1].additional_kwargs.get("investigation")
     # Use the existing WSO2 chat envelope for both human replies and gateway references.
     if receipt and payload.context.get("response_format") == REFERENCE_FORMAT:
-        answer = Investigation.model_validate(receipt).model_dump_json()
+        investigation = Investigation.model_validate(receipt)
+        # Existing gateways strictly validate the original receipt fields.
+        exclude = None if conversational else {"selection": {"style"}}
+        answer = investigation.model_dump_json(exclude=exclude)
     return ChatResponse(response=answer)
 
 

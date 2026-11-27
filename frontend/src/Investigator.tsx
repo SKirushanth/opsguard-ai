@@ -11,6 +11,9 @@ import {
   type Service,
   type Draft,
 } from "./api";
+import type { z } from "zod";
+
+type InvestigationReply = z.infer<typeof chatReply>;
 
 export function ReportBody({ report }: { report: Draft }) {
   return (
@@ -51,7 +54,7 @@ export function Investigator({
 }) {
   const [session] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; body: string; mode?: "demo" | "live" }[]
+    { role: "user" | "assistant"; body: string; mode?: InvestigationReply["mode"]; evidence?: InvestigationReply["evidence"] }[]
   >([]);
   const [input, setInput] = useState(""),
     [busy, setBusy] = useState(""),
@@ -78,8 +81,15 @@ export function Investigator({
         message,
         session_id: session,
         service_id: service.id,
+        conversational: true,
+        previous_questions: messages
+          .filter((m) => m.role === "user")
+          .slice(-3)
+          .map((m) => m.body.slice(0, 500)),
       });
-      setMessages((m) => [...m, { role: "assistant", body: reply.response, mode: reply.mode }]);
+      setMessages((m) => [...m, {
+        role: "assistant", body: reply.response, mode: reply.mode, evidence: reply.evidence,
+      }]);
     } catch (e) {
       setError(errorText(e));
       setInput(message);
@@ -154,7 +164,7 @@ export function Investigator({
           <article className="message" key={i}>
             <h4>
               {m.role === "user" ? <UserRound /> : <Bot />}
-              {m.role === "user" ? "You" : demo ? (m.mode === "live" ? "Live AI investigation" : "Demo analysis") : "OpsGuard AI"}
+              {m.role === "user" ? "You" : demo && m.mode !== "live" ? "Demo analysis" : "Live AI investigation"}
             </h4>
             {m.role === "assistant" ? (
               <Markdown
@@ -168,6 +178,16 @@ export function Investigator({
               </Markdown>
             ) : (
               <p>{m.body}</p>
+            )}
+            {!!m.evidence?.length && (
+              <details className="investigationEvidence">
+                <summary>Supporting evidence ({m.evidence.length})</summary>
+                <ul>
+                  {m.evidence.map(({ reference, text }) => (
+                    <li key={reference}><code>{reference}</code> {text}</li>
+                  ))}
+                </ul>
+              </details>
             )}
           </article>
         ))}
@@ -229,7 +249,7 @@ export function Investigator({
           placeholder="Ask about this service…"
         />
         <div>
-          <small>Each request runs a fresh investigation.</small>
+          <small>Follow-ups use this conversation and refresh the evidence.</small>
           <button className="primary" disabled={!!busy || !input.trim()}>
             <Send />
             Send

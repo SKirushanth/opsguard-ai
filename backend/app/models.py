@@ -95,6 +95,10 @@ class ChatRequest(BaseModel):
     service_id: ServiceID | None = None
     message: ChatMessage
     session_id: SessionID
+    conversational: bool = False
+    previous_questions: list[Annotated[str, StringConstraints(max_length=500)]] = Field(
+        default_factory=list, max_length=3
+    )
 
 
 class AgentReply(BaseModel):
@@ -103,3 +107,4 @@ class AgentReply(BaseModel):
 
 class ChatResponse(AgentReply):
     session_id: SessionID
+    evidence: list[dict[str, str]] | None = None

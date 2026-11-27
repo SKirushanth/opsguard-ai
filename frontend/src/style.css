@@ -702,6 +702,11 @@ details {
 .message a {
   color: #9ae8c6;
 }
+.message .investigationEvidence {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0 0;
+  font-size: 0.85rem;
+}
 summary {
   cursor: pointer;
 }

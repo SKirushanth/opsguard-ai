@@ -64,6 +64,8 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
         evidence = Evidence.collect(selected or "", observed, errors)
 
         def finish(selection=None):
+            if selection is not None and not options.get("conversational"):
+                selection = selection.model_copy(update={"style": None})
             cited_resources = list(observed) if demo else resources
             if demo and "health" not in observed:
                 raise InvalidModelResponse("Selected demo health evidence is unavailable.")
@@ -105,6 +107,12 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
                 "supported_hypotheses": {ref: sorted(causes) for ref, causes in evidence.supports.items()},
             }
             prompt += "\nAvailable evidence references: " + json.dumps(catalog)
+            if options.get("conversational"):
+                prompt += (
+                    '\nAlso include "style": "simple", "summary", "technical", or "troubleshooting" '
+                    "to match the latest question. Use earlier questions only to interpret follow-ups. "
+                    "Select only the evidence and supported causes relevant to this reply."
+                )
         response = await model_with_tools.ainvoke([SystemMessage(content=prompt), *messages])
         if not isinstance(response, AIMessage) or response.invalid_tool_calls:
             if results:

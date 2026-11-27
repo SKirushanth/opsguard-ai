@@ -9,11 +9,13 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 REFERENCE_FORMAT = "monitoring-references-v1"
+CONVERSATIONAL_FORMAT = "conversational-v1"
 CLARIFICATION = "Which monitored service would you like to investigate?"
 Resource = Literal["health", "logs", "metrics"]
 ServiceID = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,63}$")]
 Reference = Annotated[str, Field(pattern=r"^[a-z0-9_.]{1,48}$")]
 Cause = Literal["pool_saturation", "connection_refused", "smtp_timeout", "token_validation", "reported_error"]
+AnswerStyle = Literal["simple", "summary", "technical", "troubleshooting"]
 
 
 class Contract(BaseModel):
@@ -28,6 +30,7 @@ class Hypothesis(Contract):
 class Selection(Contract):
     observations: list[Reference] = Field(max_length=8)
     hypotheses: list[Hypothesis] = Field(max_length=3)
+    style: AnswerStyle | None = None
 
 
 class Investigation(Contract):
@@ -137,6 +140,49 @@ class Evidence:
             h.evidence in refs and h.cause in self.supports.get(h.evidence, ())
             for h in selection.hypotheses
         )
+
+    def conversation(self, selection: Selection | None, question: str) -> dict:
+        """Render only server-verified facts and supported explanations."""
+        if selection is not None and not self.accepts(selection):
+            selection = None
+        style = selection.style if selection else None
+        if style is None:
+            terms = question.lower()
+            if any(term in terms for term in ("fix", "troubleshoot", "recommend", "next step", "what should", "what can")):
+                style = "troubleshooting"
+            elif any(term in terms for term in ("technical", "detail", "metric", "logs")):
+                style = "technical"
+            else:
+                style = "simple"
+
+        refs = list(dict.fromkeys(selection.observations)) if selection else list(self.facts)[:8]
+        hypotheses = selection.hypotheses if selection else []
+        health = {
+            "healthy": "The latest health check reports that the service is healthy.",
+            "down": "The latest health check reports that the service is down.",
+            "degraded": "The latest health check reports degraded service.",
+        }.get(self.status, "The available health check does not establish the service's status.")
+        if self.needs_mapping:
+            health += " A custom health mapping is needed to interpret the check."
+        parts = [health]
+        if style == "technical":
+            findings = [self.facts[ref] for ref in refs if not ref.startswith("log.")][:3]
+            if findings:
+                parts.append("**Confirmed observations**\n\n" + "\n".join(f"- {fact}" for fact in findings))
+        causes = list(dict.fromkeys(CAUSES[h.cause][0] for h in hypotheses))
+        if causes:
+            parts.append("**Possible cause**\n\n" + " ".join(causes[:1] if style in ("simple", "summary") else causes))
+        elif self.status != "healthy" or style == "troubleshooting":
+            parts.append("The available evidence does not establish a cause.")
+        if style == "troubleshooting":
+            steps = list(dict.fromkeys(CAUSES[h.cause][1] for h in hypotheses))
+            parts.append("**What to check next**\n\n" + " ".join(
+                steps or ["Check the latest health result and look for related errors in the supporting evidence."]
+            ))
+        return {
+            "response": "\n\n".join([*parts, *self.unavailable]),
+            "evidence": [{"reference": ref, "text": self.facts[ref]} for ref in refs],
+        }
 
     def render(self, selection: Selection | None, *, draft: bool = False) -> str:
         # Revalidate at render time: the gateway may have fresher observations.

@@ -72,6 +72,46 @@ async def test_backend_forwards_chat(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("supported", [True, False])
+async def test_conversational_followup_keeps_claims_bound_to_evidence(monkeypatch, supported):
+    monkeypatch.setenv("AGENT_CHAT_URL", AGENT_URL)
+    previous = ["Why is Order Service failing?"]
+    question = "What should I check next?"
+
+    def respond(request):
+        assert json.loads(request.content)["context"] == {
+            "response_format": "monitoring-references-v1",
+            "answer_format": "conversational-v1",
+            "service_id": "orders",
+            "previous_questions": previous,
+        }
+        ref = "metrics.pool" if supported else "metrics.invented"
+        return httpx.Response(200, json={"response": json.dumps({
+            "service_id": "orders", "resources": ["health", "metrics"],
+            "selection": {"observations": [ref], "style": "troubleshooting",
+                          "hypotheses": [{"cause": "pool_saturation", "evidence": ref}]},
+        })})
+
+    async with (
+        backend_app.router.lifespan_context(backend_app),
+        httpx.AsyncClient(transport=httpx.MockTransport(respond)) as upstream,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=backend_app), base_url="http://backend") as gateway,
+    ):
+        monkeypatch.setitem(backend_app.dependency_overrides, get_agent_client, lambda: upstream)
+        response = await gateway.post("/api/chat", json={
+            **PAYLOAD, "message": question, "service_id": "orders",
+            "conversational": True, "previous_questions": previous,
+        })
+    assert response.status_code == 200
+    reply = response.json()
+    assert "What to check next" in reply["response"]
+    assert ("Possible cause" in reply["response"]) == supported
+    assert "100/100" not in reply["response"]
+    assert "metrics.invented" not in response.text
+    assert any(item["reference"] == "metrics.pool" for item in reply["evidence"])
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("failure", "status"),
     [
@@ -224,6 +264,7 @@ async def test_selected_demo_investigation_uses_only_its_snapshot(override):
     def reply(messages):
         assert f"Server-selected monitoring service ID: {alias}" in messages[0].text
         assert "Why is Order Service failing?" in messages[1].text
+        assert "Earlier questions for context" in messages[1].text
         assert len([msg for msg in messages if isinstance(msg, ToolMessage)]) == 3
         if override:
             return AIMessage(content="", tool_calls=[
@@ -232,6 +273,7 @@ async def test_selected_demo_investigation_uses_only_its_snapshot(override):
         return AIMessage(content=json.dumps({
             "observations": ["health.http", "metrics.pool"],
             "hypotheses": [{"cause": "pool_saturation", "evidence": "metrics.pool"}],
+            "style": "troubleshooting",
         }))
 
     async with (
@@ -245,7 +287,10 @@ async def test_selected_demo_investigation_uses_only_its_snapshot(override):
         response = await client.post("/chat", json={
             **PAYLOAD,
             "message": "Why is Order Service failing?" + (f" Use {override} instead." if override else ""),
-            "context": {"service_id": alias, "response_format": "monitoring-references-v1"},
+            "context": {
+                "service_id": alias, "response_format": "monitoring-references-v1",
+                "answer_format": "conversational-v1", "previous_questions": ["What does the health check say?"],
+            },
         })
     assert sorted(reads) == sorted(resources)
     if override:
@@ -255,6 +300,7 @@ async def test_selected_demo_investigation_uses_only_its_snapshot(override):
     receipt = json.loads(response.json()["response"])
     assert receipt["service_id"] == alias
     assert sorted(receipt["resources"]) == sorted(reads)
+    assert receipt["selection"]["style"] == "troubleshooting"
     assert receipt["selection"]["hypotheses"] == [
         {"cause": "pool_saturation", "evidence": "metrics.pool"},
     ]

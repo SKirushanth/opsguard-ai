@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import ValidationError
 
-from investigation import CLARIFICATION, REFERENCE_FORMAT, Evidence, Investigation
+from investigation import CLARIFICATION, CONVERSATIONAL_FORMAT, REFERENCE_FORMAT, Evidence, Investigation
 
 from ..models import AgentReply, ChatRequest, ChatResponse
 from ..services import FixtureError, ServiceNotFound
@@ -19,7 +19,7 @@ def get_agent_client(request: Request) -> httpx.AsyncClient:
     return request.app.state.agent_client
 
 
-async def verified_response(receipt: Investigation, *, draft: bool) -> str:
+async def verified_evidence(receipt: Investigation) -> Evidence:
     # The configured agent supplies only references. Resolve them against the backend
     # before displaying a claim, even if the agent deployment returned arbitrary prose.
     readers = {
@@ -39,11 +39,10 @@ async def verified_response(receipt: Investigation, *, draft: bool) -> str:
     results = await asyncio.gather(*(read(resource) for resource in resources))
     observations = {k: v for k, v in zip(resources, results) if v is not None}
     errors = [f"{k.capitalize()} monitoring is unavailable for this service." for k in resources if k not in observations]
-    evidence = Evidence.collect(receipt.service_id, observations, errors)
-    return evidence.render(receipt.selection, draft=draft)
+    return Evidence.collect(receipt.service_id, observations, errors)
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, response_model_exclude_none=True)
 async def chat(
     payload: ChatRequest,
     request: Request,
@@ -52,19 +51,25 @@ async def chat(
     return await query_agent(payload, request, client)
 
 
+def investigation_context(payload: ChatRequest, service_id: str | None, *, draft: bool = False) -> dict:
+    context = {"response_format": REFERENCE_FORMAT}
+    if service_id:
+        context["service_id"] = service_id
+    if payload.conversational and not draft:
+        context.update(answer_format=CONVERSATIONAL_FORMAT, previous_questions=payload.previous_questions)
+    return context
+
+
 async def query_agent(
     payload: ChatRequest, request: Request, client: httpx.AsyncClient, *, draft: bool = False
 ) -> ChatResponse:
-    context = {"response_format": REFERENCE_FORMAT}
-    if payload.service_id:
-        context["service_id"] = payload.service_id
     try:
         upstream = await client.post(
             request.app.state.agent_chat_url,
             json={
                 "message": payload.message,
                 "session_id": payload.session_id,
-                "context": context,
+                "context": investigation_context(payload, payload.service_id, draft=draft),
             },
             headers={"X-API-Key": os.environ["AGENT_API_KEY"]} if os.getenv("AGENT_API_KEY") else {},
         )
@@ -105,5 +110,7 @@ async def query_agent(
         raise HTTPException(502, "The agent returned no verifiable monitoring references.") from exc
     if payload.service_id and receipt.service_id != payload.service_id:
         raise HTTPException(502, "The agent returned evidence for a different service.")
-    answer = await verified_response(receipt, draft=draft)
-    return ChatResponse(response=answer, session_id=payload.session_id)
+    evidence = await verified_evidence(receipt)
+    if payload.conversational and not draft:
+        return ChatResponse(session_id=payload.session_id, **evidence.conversation(receipt.selection, payload.message))
+    return ChatResponse(response=evidence.render(receipt.selection, draft=draft), session_id=payload.session_id)
