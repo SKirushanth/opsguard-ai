@@ -13,11 +13,14 @@ from pydantic import ValidationError
 
 from investigation import Evidence, Investigation
 from .access import matches
-from .routes.chat import investigation_context
+from .routes.chat import investigation_context, investigation_error
 
 router = APIRouter(prefix="/api/services")
 logger = logging.getLogger("uvicorn.error").getChild("demo_ai")
 
+QUOTA_REASONS = {"concurrency_limit", "global_daily_limit", "session_limit", "client_daily_limit", "agent_http_429"}
+VALIDATION_REASONS = {"wrong_service", "missing_health_read", "unverified_tool_reads",
+                      "missing_selection", "unsupported_selection", "invalid_receipt"}
 
 class Budget:
     def __init__(self):
@@ -62,27 +65,29 @@ async def tool_read(snapshot_id: str, resource: Literal["health", "logs", "metri
 
 async def investigate(request, payload, session, observations):
     ev = Evidence.collect(payload.service_id, observations, [])
-    def reply_for(mode, selection=None):
-        content = ev.conversation(selection, payload.message) if payload.conversational else {"response": ev.render(selection)}
-        return {"session_id": payload.session_id, "mode": mode, **content}
-
-    def fallback(reason: str):
-        logger.info("demo_ai_fallback reason=%s", reason)
-        return reply_for("demo")
+    def failure(reason: str):
+        logger.info("demo_ai_rejected reason=%s", reason)
+        if reason in QUOTA_REASONS:
+            return investigation_error("quota", 429, "The AI investigation allowance was reached.")
+        if reason in VALIDATION_REASONS:
+            return investigation_error("validation", 502, "The AI response could not be verified.")
+        if reason in {"agent_timeout", "agent_http_504"}:
+            return investigation_error("timeout", 504, "The AI investigation timed out.")
+        return investigation_error("unavailable", 503, "The AI investigator is unavailable.")
 
     key = os.getenv("AGENT_API_KEY")
     url = request.app.state.agent_chat_url
     budget = request.app.state.demo_ai
     if not key:
-        return fallback("missing_agent_invocation_key")
+        raise failure("missing_agent_invocation_key")
     if not url.startswith("https://"):
-        return fallback("agent_url_requires_https")
+        raise failure("agent_url_requires_https")
     if not os.getenv("MONITORING_API_KEY"):
-        return fallback("missing_monitoring_key")
+        raise failure("missing_monitoring_key")
     # Use the transport peer, never a visitor-supplied forwarding header.
     limit_reason = budget.reserve(session, request.client.host if request.client else "unknown")
     if limit_reason:
-        return fallback(limit_reason)
+        raise failure(limit_reason)
     alias = "demo-ai-" + secrets.token_hex(12)
     reads = []
     budget.active[alias] = observations, reads
@@ -95,24 +100,27 @@ async def investigate(request, payload, session, observations):
         reply.raise_for_status()
         receipt = Investigation.model_validate_json(reply.json()["response"])
         if receipt.service_id != alias:
-            return fallback("wrong_service")
+            raise failure("wrong_service")
         if "health" not in reads:
-            return fallback("missing_health_read")
+            raise failure("missing_health_read")
         if not set(receipt.resources).issubset(reads):
-            return fallback("unverified_tool_reads")
+            raise failure("unverified_tool_reads")
         verified = Evidence.collect(payload.service_id, {r: observations[r] for r in receipt.resources}, [])
         if not receipt.selection:
-            return fallback("missing_selection")
+            raise failure("missing_selection")
         if not verified.accepts(receipt.selection):
-            return fallback("unsupported_selection")
-        return reply_for("live", receipt.selection)
+            raise failure("unsupported_selection")
+        content = ev.conversation(receipt.selection, payload.message) if payload.conversational else {
+            "response": ev.render(receipt.selection),
+        }
+        return {"session_id": payload.session_id, "mode": "live", **content}
     except httpx.HTTPStatusError as exc:
-        return fallback(f"agent_http_{exc.response.status_code}")
+        raise failure(f"agent_http_{exc.response.status_code}") from exc
     except (httpx.TimeoutException, TimeoutError):
-        return fallback("agent_timeout")
+        raise failure("agent_timeout") from None
     except httpx.HTTPError:
-        return fallback("agent_transport_error")
+        raise failure("agent_transport_error") from None
     except (ValidationError, ValueError, KeyError, TypeError):
-        return fallback("invalid_receipt")
+        raise failure("invalid_receipt") from None
     finally:
         budget.active.pop(alias, None)

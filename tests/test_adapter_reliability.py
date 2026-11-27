@@ -171,10 +171,9 @@ async def test_gateway_rechecks_claims_and_service_scope(monkeypatch):
         monkeypatch.setitem(app.dependency_overrides, get_agent_client, lambda: upstream)
         payload = {"service_id": "auth", "message": "Investigate", "session_id": "test"}
         result = await client.post("/api/chat", json=payload)
-        assert result.status_code == 200
-        answer = result.json()["response"]
-        assert answer.startswith("Monitored health for auth: healthy.")
-        assert "Possible causes" not in answer and "pool" not in answer
+        assert result.status_code == 502
+        assert result.json()["detail"]["category"] == "validation"
+        assert "response" not in result.json() and "pool" not in result.text
         proposal["service_id"] = "orders"
         assert (await client.post("/api/chat", json=payload)).status_code == 502
 

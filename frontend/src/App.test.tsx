@@ -98,6 +98,7 @@ it("investigates, reviews a draft, and saves only after explicit confirmation", 
       return ok({
         response: "The latest health check reports that the service is down.",
         session_id: "chat",
+        mode: "live",
         evidence: [{ reference: "health.http", text: "HTTP 503" }],
       });
     if (path.endsWith("/draft")) return ok(report);
@@ -308,7 +309,9 @@ it("supports unknown status on dashboard and custom mapping workflow in Applicat
   ]);
 });
 
-it("opens a private demo from sign-in and returns to operator sign-in", async () => {
+it("retains demo follow-up history and retries a failed turn without duplicating it", async () => {
+  let conversationId: string | undefined;
+  let attempts = 0;
   const fetcher = vi.fn(async (input: string, init: RequestInit) => {
     const path = new URL(input).pathname;
     if (path === "/api/public-demo/session") return ok({token: "visitor", expires_in: 1800});
@@ -319,6 +322,22 @@ it("opens a private demo from sign-in and returns to operator sign-in", async ()
     if (path.endsWith("/health")) return ok({service_id:"orders", status:"down", http_status:503, message:"Pool exhausted"});
     if (path.endsWith("/logs")) return ok({service_id:"orders", logs:[]});
     if (path.endsWith("/metrics")) return ok({service_id:"orders", metrics:{}});
+    if (path.endsWith("/analysis")) {
+      const payload = JSON.parse(String(init.body));
+      expect(payload).toMatchObject({ service_id: "orders", conversational: true });
+      attempts++;
+      if (attempts === 1) {
+        conversationId = payload.session_id;
+        return ok({ response: "The database pool may be full.", session_id: conversationId, mode: "live" });
+      }
+      if (attempts === 4) return ok({ detail: { category: "quota" } }, 429);
+      expect(payload).toMatchObject({
+        session_id: conversationId, message: "Can you explain simply?",
+        previous_questions: ["What might be the cause?"],
+      });
+      if (attempts === 2) return ok({ detail: { category: "validation" } }, 502);
+      return ok({ response: "The service may be waiting for a free connection.", session_id: conversationId, mode: "live" });
+    }
     throw Error("Unexpected demo request");
   });
   vi.stubGlobal("fetch", fetcher);
@@ -327,6 +346,25 @@ it("opens a private demo from sign-in and returns to operator sign-in", async ()
   expect(fetcher.mock.calls.every(([input]) => new URL(input).pathname.startsWith("/api/public-demo/"))).toBe(true);
   await screen.findByText("Order Service");
   expect(screen.queryByRole("button", {name:"Applications"})).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Investigate" }));
+  const question = screen.getByLabelText("Investigation question");
+  const send = (value: string) => {
+    fireEvent.change(question, { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  };
+  send("What might be the cause?");
+  await screen.findByText("The database pool may be full.");
+  send("Can you explain simply?");
+  await screen.findByText("Investigation could not be verified");
+  const retry = screen.getByRole("button", { name: "Retry investigation" });
+  fireEvent.click(retry);
+  fireEvent.click(retry);
+  await screen.findByText("The service may be waiting for a free connection.");
+  expect(screen.getAllByText("Can you explain simply?")).toHaveLength(1);
+  expect(screen.queryByText("Investigation could not be verified")).toBeNull();
+  send("What should I check next?");
+  await screen.findByText("AI usage limit reached");
+  expect(screen.queryByRole("button", { name: "Retry investigation" })).toBeNull();
   fireEvent.click(screen.getByRole("button", {name:"Operator sign-in"}));
   expect(screen.getByLabelText("Operator password")).toBeTruthy();
 });

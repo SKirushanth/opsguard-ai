@@ -67,7 +67,8 @@ async def test_backend_forwards_chat(monkeypatch: pytest.MonkeyPatch) -> None:
         assert request.url == AGENT_URL
         assert json.loads(request.content) == {**PAYLOAD, "context": {"response_format": "monitoring-references-v1"}}
         return httpx.Response(200, json={"response": json.dumps({
-            "service_id": "orders", "resources": ["health"], "selection": None,
+            "service_id": "orders", "resources": ["health"],
+            "selection": {"observations": ["health.http"], "hypotheses": []},
         })})
 
     async with (
@@ -113,8 +114,14 @@ async def test_conversational_followup_keeps_claims_bound_to_evidence(monkeypatc
             **PAYLOAD, "message": question, "service_id": "orders",
             "conversational": True, "previous_questions": previous,
         })
+    if not supported:
+        assert response.status_code == 502
+        assert response.json()["detail"]["category"] == "validation"
+        assert "metrics.invented" not in response.text
+        return
     assert response.status_code == 200
     reply = response.json()
+    assert reply["mode"] == "live"
     assert "What to check next" in reply["response"]
     assert ("Possible cause" in reply["response"]) == supported
     assert "100/100" not in reply["response"]
@@ -379,13 +386,23 @@ async def test_demo_conversation_through_backend_and_agent(monkeypatch):
     monkeypatch.setenv("AGENT_CHAT_URL", "https://agent.example.test/chat")
     monkeypatch.setenv("AGENT_API_KEY", "test-invoke")
     monkeypatch.setenv("MONITORING_API_KEY", "test-monitor")
+    aliases = []
+    diagnosis = "What might be the cause?"
+    followup = "Can you explain simply?"
 
     def reply(messages):
-        assert "What should I check next?" in messages[1].text
-        assert "Why are orders failing?" in messages[1].text
+        target, question = messages[1].text.split("\n", 1)
+        alias = target.removeprefix("Selected monitoring service ID: ")
+        assert alias.startswith("demo-ai-")
+        aliases.append(alias)
+        if len(aliases) == 1:
+            assert question == diagnosis
+        else:
+            assert question.startswith(f"Latest question: {followup}")
+            assert f"Earlier questions for context: ['{diagnosis}']" in question
         assert "100/100 connections" in messages[-1].text
         return AIMessage(content=json.dumps({
-            "observations": ["metrics.pool"], "style": "troubleshooting",
+            "observations": ["metrics.pool"], "style": "technical" if len(aliases) == 1 else "simple",
             "hypotheses": [{"cause": "pool_saturation", "evidence": "metrics.pool"}],
         }))
 
@@ -401,14 +418,17 @@ async def test_demo_conversation_through_backend_and_agent(monkeypatch):
         backend_app.state.agent_client = agent
         credentials = await gateway.post("/api/public-demo/session")
         headers = {"Authorization": "Bearer " + credentials.json()["token"]}
-        response = await gateway.post("/api/public-demo/analysis", headers=headers, json={
-            **PAYLOAD, "service_id": "orders", "message": "What should I check next?",
-            "conversational": True, "previous_questions": ["Why are orders failing?"],
-        })
-
-    assert response.status_code == 200
-    answer = response.json()
-    assert answer["mode"] == "live"
-    assert "Possible cause" in answer["response"] and "What to check next" in answer["response"]
-    assert [item["reference"] for item in answer["evidence"]] == ["metrics.pool"]
+        for question, history in [(diagnosis, []), (followup, [diagnosis])]:
+            response = await gateway.post("/api/public-demo/analysis", headers=headers, json={
+                **PAYLOAD, "service_id": "orders", "message": question,
+                "conversational": True, "previous_questions": history,
+            })
+            assert response.status_code == 200
+            answer = response.json()
+            assert answer["mode"] == "live" and answer["session_id"] == PAYLOAD["session_id"]
+            assert "Possible cause" in answer["response"]
+            assert ("Confirmed observations" in answer["response"]) == (question == diagnosis)
+            assert [item["reference"] for item in answer["evidence"]] == ["metrics.pool"]
+            assert (await monitoring.get(f"/api/services/{aliases[-1]}/health")).status_code == 404
+    assert len(set(aliases)) == 2
     assert not backend_app.state.demo_ai.active

@@ -57,7 +57,7 @@ def test_demo_analysis_and_incident_lifecycle(monkeypatch):
             return {"Authorization": "Bearer " + c.post(BASE + "/session").json()["token"]}
         a, b = visitor(), visitor()
         query = {"service_id": "orders", "session_id": "demo", "message": "investigate"}
-        answer = c.post(BASE + "/analysis", json=query, headers=a).json()["response"]
+        answer = c.post(BASE + "/analysis/local", json=query, headers=a).json()["response"]
         assert "HTTP 503" in answer
         draft = c.post(BASE + "/incidents/draft", headers=a, json={
             "service_id": "orders", "session_id": "demo", "application_id": "demo", "investigation": answer
@@ -105,14 +105,18 @@ def test_hosted_demo_reads_snapshot_and_enforces_quota(monkeypatch):
             assert reply["mode"]=="live" and "HTTP 401" in reply["response"]
             assert c.get("/api/services/"+aliases[-1]+"/health",headers={"X-Monitoring-Key":"test-monitor"}).status_code==404
             c.post(BASE+"/demo/reset",headers=h,json={})
-        assert c.post(BASE+"/analysis",headers=h,json=query).json()["mode"]=="demo"
+        limited = c.post(BASE+"/analysis",headers=h,json=query)
+        assert limited.status_code == 429 and limited.json()["detail"]["category"] == "quota"
         app.state.demo_ai.limit=3
         other={"Authorization":"Bearer "+c.post(BASE+"/session").json()["token"]}
-        assert c.post(BASE+"/analysis",headers=other,json=query).json()["mode"]=="demo"
+        assert c.post(BASE+"/analysis",headers=other,json=query).status_code == 429
         assert len(aliases)==3
 
-@pytest.mark.parametrize("failure", ["provider", "wrong_target", "unread_evidence"])
-def test_hosted_failure_uses_only_local_evidence(monkeypatch, failure):
+@pytest.mark.parametrize(("failure", "status", "category"), [
+    ("provider", 429, "quota"), ("unavailable", 503, "unavailable"), ("timeout", 504, "timeout"),
+    ("wrong_target", 502, "validation"), ("unread_evidence", 502, "validation"),
+])
+def test_hosted_failure_returns_status_instead_of_analysis(monkeypatch, failure, status, category):
     import httpx
     import json
     monkeypatch.setenv("PROTECT_READS", "true")
@@ -122,6 +126,10 @@ def test_hosted_failure_uses_only_local_evidence(monkeypatch, failure):
     async def host(req):
         if failure == "provider":
             return httpx.Response(429)
+        if failure == "unavailable":
+            return httpx.Response(503)
+        if failure == "timeout":
+            raise httpx.ReadTimeout("private provider details")
         alias = json.loads(req.content)["context"]["service_id"]
         if failure == "wrong_target":
             alias = "orders"
@@ -133,7 +141,8 @@ def test_hosted_failure_uses_only_local_evidence(monkeypatch, failure):
         monkeypatch.setattr(app.state,"agent_client",httpx.AsyncClient(transport=httpx.MockTransport(host)))
         h={"Authorization":"Bearer "+c.post(BASE+"/session").json()["token"]}
         q={"service_id":"auth","session_id":"test","message":"investigate"}
-        result=c.post(BASE+"/analysis",headers=h,json=q).json()
-        assert result == c.post(BASE+"/analysis/local",headers=h,json=q).json()
-        assert result["mode"] == "demo" and "HTTP 200" in result["response"]
+        response = c.post(BASE+"/analysis",headers=h,json=q)
+        assert response.status_code == status
+        assert response.json()["detail"]["category"] == category
+        assert "response" not in response.json() and "private provider details" not in response.text
         assert not app.state.demo_ai.active

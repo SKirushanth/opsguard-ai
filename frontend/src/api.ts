@@ -13,6 +13,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public category?: string,
   ) {
     super(message);
   }
@@ -58,12 +59,14 @@ export async function api<T>(
         ? detail
         : Array.isArray(detail)
           ? detail.map((e) => e.loc.slice(1).join(".") + " " + e.msg).join(", ")
-          : "Request failed (HTTP " + response.status + ").",
+          : typeof detail?.message === "string" ? detail.message
+            : "Request failed (HTTP " + response.status + ").",
+      typeof detail?.category === "string" ? detail.category : undefined,
     );
   }
   const parsed = schema.safeParse(data);
   if (!parsed.success)
-    throw new ApiError(502, "The backend returned an invalid response.");
+    throw new ApiError(502, "The backend returned an invalid response.", "validation");
   return parsed.data;
 }
 

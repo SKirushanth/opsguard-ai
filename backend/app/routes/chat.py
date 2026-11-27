@@ -16,6 +16,9 @@ from . import monitoring
 router = APIRouter(prefix="/api", tags=["chat"])
 logger = logging.getLogger("uvicorn.error").getChild("operator_ai")
 
+def investigation_error(category: str, status: int, message: str) -> HTTPException:
+    return HTTPException(status, detail={"category": category, "message": message})
+
 
 def get_agent_client(request: Request) -> httpx.AsyncClient:
     return request.app.state.agent_client
@@ -87,6 +90,8 @@ async def query_agent(
         ) from exc
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
+        if status == 429:
+            raise investigation_error("quota", 429, "The agent usage limit was reached.") from exc
         if status == 504:
             raise HTTPException(
                 status_code=504, detail="The agent investigation timed out."
@@ -100,27 +105,25 @@ async def query_agent(
             status_code=502, detail="The agent could not complete the request."
         ) from exc
     except ValidationError as exc:
-        raise HTTPException(
-            status_code=502, detail="The agent returned an invalid response."
-        ) from exc
+        raise investigation_error("validation", 502, "The agent returned an invalid response.") from exc
 
     if payload.service_id is None and reply.response == CLARIFICATION:
         return ChatResponse(response=CLARIFICATION, session_id=payload.session_id)
     try:
         receipt = Investigation.model_validate_json(reply.response)
     except ValidationError as exc:
-        raise HTTPException(502, "The agent returned no verifiable monitoring references.") from exc
+        raise investigation_error("validation", 502, "The agent returned no verifiable monitoring references.") from exc
     if payload.service_id and receipt.service_id != payload.service_id:
-        raise HTTPException(502, "The agent returned evidence for a different service.")
+        raise investigation_error("validation", 502, "The agent returned evidence for a different service.")
     evidence = await verified_evidence(receipt)
+    selection = receipt.selection
+    if not draft and (selection is None or not evidence.accepts(selection)):
+        reason = "missing_selection" if selection is None else "unsupported_references"
+        logger.info("operator_ai_rejected reason=%s", reason)
+        raise investigation_error("validation", 502, "The agent returned no verifiable evidence selection.")
     if payload.conversational and not draft:
-        selection = receipt.selection
-        if selection is None or not evidence.accepts(selection):
-            reason = "missing_selection" if selection is None else "unsupported_references"
-            logger.info("operator_ai_fallback reason=%s", reason)
-            selection = None
         return ChatResponse(
-            session_id=payload.session_id, mode="live" if selection else "monitoring",
+            session_id=payload.session_id, mode="live",
             **evidence.conversation(selection, payload.message),
         )
     return ChatResponse(response=evidence.render(receipt.selection, draft=draft), session_id=payload.session_id)
