@@ -37,7 +37,7 @@ jobs:
                  'agent':matches('agent/','requirements.txt','backend/requirements.txt','investigation.py')}
           print(flags)
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-              print('production='+str(any(flags.values()) or os.environ['EVENT']=='workflow_dispatch').lower(),file=f)
+              print('production='+str(any(flags.values()) or matches("deploy/pipeline/",".github/workflows/release.yml") or os.environ['EVENT']=='workflow_dispatch').lower(),file=f)
           PY
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:

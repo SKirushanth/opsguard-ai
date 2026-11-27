@@ -50,7 +50,11 @@ def snapshot(component):
     assert ing["external"]==(component=="frontend") and not ing.get("allowInsecure")
     r = az("containerapp","revision","show","-g",RG,"-n",name,"--revision",revision)["properties"]
     assert r["healthState"]=="Healthy" and r["trafficWeight"]==100
-    t=r["template"];c=t["containers"][0]
+    # Read and patch through the same ARM schema. CLI projections can contain
+    # newer scale fields that older ARM API versions reject.
+    revision_url = "https://management.azure.com"+a["id"]+"/revisions/"+revision+"?api-version=2025-01-01"
+    t=az("rest","--method","get","--url",revision_url)["properties"]["template"]
+    c=t["containers"][0]
     assert len(t["containers"])==1 and not t.get("volumes") and not c.get("volumeMounts")
     if component=="backend":
         assert t["scale"]["minReplicas"]==t["scale"]["maxReplicas"]==1
@@ -71,7 +75,7 @@ def snapshot(component):
 
 def activate(base,image,suffix):
     t=copy.deepcopy(base["template"]);t["revisionSuffix"]=suffix;t["containers"][0]["image"]=image
-    uri="https://management.azure.com"+base["id"]+"?api-version=2024-03-01"
+    uri="https://management.azure.com"+base["id"]+"?api-version=2025-01-01"
     with tempfile.NamedTemporaryFile(mode="w",suffix=".json") as body:
         json.dump({"properties":{"template":t}},body);body.flush()
         az("rest","--method","patch","--url",uri,"--body","@"+body.name,"--output","none")
@@ -89,7 +93,9 @@ def activate(base,image,suffix):
 
 
 def build(base,component):
-    image=base["repo"]+":"+SHA
+    # Pipeline-only repairs must reuse the image built for identical component inputs.
+    source=run("git","log","-1","--format=%H",SHA,"--",*PATHS[component])
+    image=base["repo"]+":"+source
     # A retry reuses the image already published for this commit.
     probe=subprocess.run(["docker","buildx","imagetools","inspect",image],capture_output=True,text=True)
     if probe.returncode:
@@ -112,6 +118,11 @@ def transaction(plan,verify):
         verify()
     except Exception:
         for component,base in reversed(touched):
+            if "revision" in base:
+                live=az("containerapp","show","-g",RG,"-n",base["name"])["properties"]
+                if live["latestRevisionName"] == live["latestReadyRevisionName"] == base["revision"]:
+                    summary("Azure retained the original ready revision: "+base["revision"])
+                    continue
             if component=="backend":
                 smoke.guard()
             activate(base,base["repo"]+"@"+base["digest"],"rb-"+os.environ["GITHUB_RUN_ID"][-4:]+"-"+base["source"])

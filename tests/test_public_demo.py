@@ -1,4 +1,5 @@
-﻿from fastapi.testclient import TestClient
+﻿import pytest
+from fastapi.testclient import TestClient
 
 from backend.app import public_demo
 from backend.app.main import app
@@ -109,3 +110,30 @@ def test_hosted_demo_reads_snapshot_and_enforces_quota(monkeypatch):
         other={"Authorization":"Bearer "+c.post(BASE+"/session").json()["token"]}
         assert c.post(BASE+"/analysis",headers=other,json=query).json()["mode"]=="demo"
         assert len(aliases)==3
+
+@pytest.mark.parametrize("failure", ["provider", "wrong_target", "unread_evidence"])
+def test_hosted_failure_uses_only_local_evidence(monkeypatch, failure):
+    import httpx
+    import json
+    monkeypatch.setenv("PROTECT_READS", "true")
+    monkeypatch.setenv("MONITORING_API_KEY", "private-test")
+    monkeypatch.setenv("AGENT_API_KEY", "test-key")
+    monkeypatch.setenv("AGENT_CHAT_URL", "https://agent.invalid/chat")
+    async def host(req):
+        if failure == "provider":
+            return httpx.Response(429)
+        alias = json.loads(req.content)["context"]["service_id"]
+        if failure == "wrong_target":
+            alias = "orders"
+        return httpx.Response(200, json={"response":json.dumps({
+            "service_id":alias, "resources":["health"],
+            "selection":{"observations":["health.http"],"hypotheses":[]}
+        })})
+    with TestClient(app) as c:
+        monkeypatch.setattr(app.state,"agent_client",httpx.AsyncClient(transport=httpx.MockTransport(host)))
+        h={"Authorization":"Bearer "+c.post(BASE+"/session").json()["token"]}
+        q={"service_id":"auth","session_id":"test","message":"investigate"}
+        result=c.post(BASE+"/analysis",headers=h,json=q).json()
+        assert result == c.post(BASE+"/analysis/local",headers=h,json=q).json()
+        assert result["mode"] == "demo" and "HTTP 200" in result["response"]
+        assert not app.state.demo_ai.active
