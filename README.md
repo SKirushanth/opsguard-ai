@@ -180,3 +180,7 @@ The two-server HTTP test ran the real FastAPI processes, LangGraph, HTTP tools a
 ## MVP limitations and next steps
 
 This is a single-operator workspace with shared demo state. Everyone with an operator session can change that workspace. Sign-in issues a one-hour bearer token kept in browser memory. The agent has read-only tools, and the console chat transcript lasts only within the current service context. An LLM can still misinterpret evidence. Review the report before approving it. External integrations support one service per registration, custom health field mapping for JSON payloads, bounded plain-text or JSON logs, and unit-known metrics only (complex universal metrics mapping is outside this MVP). The SQLite design targets a single disk-backed backend instance. For a larger deployment, add per-user roles, login and model-usage rate limits, and database backups.
+
+## Visitor workspace
+
+The dashboard starts a private 30-minute session automatically. Demo analysis summarizes the current simulated health, logs and metrics deterministically. Public hosted AI usage is zero because WSO2 monitoring tools use a workspace-wide credential. Operator investigations retain the hosted agent and validated monitoring references. Demo incidents and failures are temporary; Reset demo workspace clears reports and resets the simulated services. Set PROTECT_READS=true for this experience.

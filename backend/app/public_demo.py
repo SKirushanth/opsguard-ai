@@ -1,5 +1,10 @@
 """Visitor-only routes. Each temporary session owns at most three scenario overrides."""
 import asyncio
+import json
+from uuid import UUID
+from investigation import Evidence
+from .incidents import Approval, ChangeStatus, Draft, DraftRequest, Report, StoredIncident
+from .models import ChatRequest
 import os
 import secrets
 from datetime import UTC, datetime
@@ -23,7 +28,7 @@ def sessions(request: Request):
 
 @router.post("/session")
 async def start(request: Request, response: Response):
-    if os.getenv("PROTECT_READS", "false").strip().lower() == "false":
+    if os.getenv("PROTECT_READS", "true").strip().lower() == "false":
         raise HTTPException(403, "Enable protected workspace reads to use public demo sessions.")
     store = sessions(request)
     if len(store) >= MAX_SESSIONS:
@@ -91,6 +96,70 @@ async def activate(payload: scenarios.Scenario, state=Depends(visitor)):
 @router.post("/demo/reset")
 async def reset(payload: scenarios.Reset, state=Depends(visitor)):
     ids = [payload.service_id] if payload.service_id else list(scenarios.FAILURES)
+    if not payload.service_id:
+        state.clear()
     for id in ids:
         change(state, id, "healthy")
     return {"service_ids": ids, "status": "healthy"}
+
+
+def evidence(service_id, state):
+    if service_id not in scenarios.FAILURES:
+        raise HTTPException(422, "Select a simulated service.")
+    record, logs, metrics = snapshot(service_id, state)
+    return Evidence.collect(service_id, {
+        "health": record.model_dump(),
+        "logs": {"logs": [entry.model_dump(mode="json") for entry in logs]},
+        "metrics": {"metrics": metrics.model_dump()},
+    }, [])
+
+
+@router.post("/analysis")
+async def analysis(payload: ChatRequest, state=Depends(visitor)):
+    return {"session_id": payload.session_id, "response": evidence(payload.service_id, state).render(None)}
+
+
+def draft_for(payload, state):
+    if payload.application_id != "demo":
+        raise HTTPException(422, "Select the demo application.")
+    report = Report.model_validate(json.loads(evidence(payload.service_id, state).render(None, draft=True)))
+    return Draft(application_id="demo", service_id=payload.service_id, **report.model_dump())
+
+
+@router.post("/incidents/draft")
+async def draft(payload: DraftRequest, state=Depends(visitor)):
+    return draft_for(payload, state)
+
+
+@router.post("/incidents")
+async def confirm(payload: Approval, state=Depends(visitor)):
+    if not payload.confirmed:
+        raise HTTPException(422, "Confirm the incident first.")
+    reports = state.setdefault("incidents", {})
+    previous = reports.get(payload.approval_id)
+    submitted = payload.model_dump(exclude={"confirmed", "approval_id"})
+    if previous and all(getattr(previous, key) == value for key, value in submitted.items()):
+        return previous
+    report = draft_for(payload, state)
+    if previous or report.model_dump() != submitted:
+        raise HTTPException(409, "Prepare a fresh draft from current evidence.")
+    if len(reports) >= 20:
+        raise HTTPException(429, "Reset the demo workspace to create more reports.")
+    reports[payload.approval_id] = StoredIncident(**submitted, id=payload.approval_id,
+        created_at=datetime.now(UTC), status="open", resolved_at=None)
+    return reports[payload.approval_id]
+
+
+@router.get("/incidents")
+async def history(state=Depends(visitor)):
+    return list(reversed(state.get("incidents", {}).values()))
+
+
+@router.patch("/incidents/{id}")
+async def update(id: UUID, payload: ChangeStatus, state=Depends(visitor)):
+    report = state.get("incidents", {}).get(id)
+    if not report:
+        raise HTTPException(404, "Demo incident not found.")
+    report.status = payload.status
+    report.resolved_at = datetime.now(UTC) if payload.status == "resolved" else None
+    return report

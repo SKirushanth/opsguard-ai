@@ -47,3 +47,26 @@ def test_expiration(monkeypatch):
         token = client.post(BASE + "/session").json()["token"]
         assert client.get(BASE + "/services", headers={"Authorization": "Bearer " + token}).status_code == 401
         assert not app.state.demo_sessions
+
+def test_demo_analysis_and_incident_lifecycle(monkeypatch):
+    from uuid import uuid4
+    monkeypatch.setenv("PROTECT_READS", "true")
+    with TestClient(app) as c:
+        def visitor():
+            return {"Authorization": "Bearer " + c.post(BASE + "/session").json()["token"]}
+        a, b = visitor(), visitor()
+        query = {"service_id": "orders", "session_id": "demo", "message": "investigate"}
+        answer = c.post(BASE + "/analysis", json=query, headers=a).json()["response"]
+        assert "HTTP 503" in answer
+        draft = c.post(BASE + "/incidents/draft", headers=a, json={
+            "service_id": "orders", "session_id": "demo", "application_id": "demo", "investigation": answer
+        }).json()
+        payload = dict(draft, confirmed=True, approval_id=str(uuid4()))
+        assert c.post(BASE + "/incidents", headers=a, json=dict(payload,title="unsupported")).status_code == 409
+        row = c.post(BASE + "/incidents", headers=a, json=payload).json()
+        path = BASE + "/incidents/" + row["id"]
+        assert c.patch(path, headers=b, json={"status":"resolved"}).status_code == 404
+        assert c.patch(path, headers=a, json={"status":"resolved"}).json()["status"] == "resolved"
+        assert c.get(BASE + "/incidents", headers=b).json() == []
+        c.post(BASE + "/demo/reset", json={}, headers=a)
+        assert c.get(BASE + "/incidents", headers=a).json() == []

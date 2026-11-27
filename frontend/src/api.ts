@@ -24,9 +24,10 @@ export async function api<T>(
   method = "GET",
   body?: unknown,
 ): Promise<T> {
+  const sentToken = token;
   let response: Response;
   try {
-    response = await fetch(base + (demoSession ? "/api/public-demo" : "/api") + path, {
+    response = await fetch(base + (demoSession && path !== "/session" ? "/api/public-demo" : "/api") + path, {
       method,
       headers: {
         ...(body !== undefined && { "Content-Type": "application/json" }),
@@ -46,6 +47,9 @@ export async function api<T>(
     response.status === 204
       ? null
       : await response.json().catch(() => undefined);
+  if (response.status === 401 && sentToken && sentToken === token && path !== "/session") {
+    window.dispatchEvent(new Event("workspace-session-ended"));
+  }
   if (!response.ok) {
     const detail = data?.detail;
     throw new ApiError(

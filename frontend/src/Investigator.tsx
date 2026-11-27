@@ -40,11 +40,13 @@ export function Investigator({
   app,
   service,
   operator,
+  demo,
   openHistory,
 }: {
   app: Application;
   service: Service;
   operator: boolean;
+  demo: boolean;
   openHistory: () => void;
 }) {
   const [session] = useState(() => crypto.randomUUID());
@@ -72,7 +74,7 @@ export function Investigator({
     setReview(null);
     setSaved("");
     try {
-      const reply = await api("/chat", chatReply, "POST", {
+      const reply = await api(demo ? "/analysis" : "/chat", chatReply, "POST", {
         message,
         session_id: session,
         service_id: service.id,
@@ -126,7 +128,7 @@ export function Investigator({
         <div>
           <h2>
             <ScanSearch />
-            AI Investigator
+            {demo ? "Demo analysis" : "Live AI investigator"}
           </h2>
           <p>
             {service.name} ·{" "}
@@ -137,7 +139,7 @@ export function Investigator({
       {!messages.length && (
         <div className="empty">
           <h3>Investigate {service.name}</h3>
-          <p>Ask about health, recent logs or performance.</p>
+          <p>{demo ? "Review a deterministic summary of this service?s current simulated evidence." : "Ask about health, recent logs or performance."}</p>
           <div className="suggestions">
             {suggestions.map((s) => (
               <button key={s} onClick={() => send(s)}>
@@ -152,7 +154,7 @@ export function Investigator({
           <article className="message" key={i}>
             <h4>
               {m.role === "user" ? <UserRound /> : <Bot />}
-              {m.role === "user" ? "You" : "OpsGuard AI"}
+              {m.role === "user" ? "You" : demo ? "Demo analysis" : "OpsGuard AI"}
             </h4>
             {m.role === "assistant" ? (
               <Markdown

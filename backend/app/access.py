@@ -36,7 +36,7 @@ def operator(request: Request) -> None:
 
 
 def viewer(request: Request) -> None:
-    if os.getenv("PROTECT_READS", "false").strip().lower() != "false":
+    if os.getenv("PROTECT_READS", "true").strip().lower() != "false":
         operator(request)
 
 

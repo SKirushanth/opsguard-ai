@@ -58,30 +58,43 @@ export default function App() {
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(""),
     [error, setError] = useState("");
+  const [welcome, setWelcome] = useState(true), [tour, setTour] = useState(false);
   const operator = expiry > 0 && !demo,
     app = apps.find((a) => a.id === appId),
     service = services.find((s) => s.id === serviceId) ?? services[0];
   useEffect(() => {
     if (!expiry) return;
-    const timeout = setTimeout(
-      () => {
+    function endSession() {
         setToken("");
         setExpiry(0);
         setApps([]);
         setServices([]);
         setDemo(false);
         setPage("Dashboard");
-        setNotice("Session expired. Choose a new session to continue.");
-      },
-      Math.max(0, expiry - Date.now()),
-    );
-    return () => clearTimeout(timeout);
+        setNotice("Session expired. Starting a fresh demo.");
+    }
+    const timeout = setTimeout(endSession, Math.max(0, expiry - Date.now()));
+    window.addEventListener("workspace-session-ended", endSession);
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener("workspace-session-ended", endSession);
+    };
   }, [expiry]);
   useEffect(() => {
     let current = true;
     setLoading(true);
     setLoadError("");
     async function load() {
+      if (!expiry) {
+        const session = await api("/public-demo/session", z.object({ token: z.string(), expires_in: z.number() }), "POST");
+        if (current) {
+          setToken(session.token, true);
+          setDemo(true);
+          setAppId("demo");
+          setExpiry(Date.now() + session.expires_in * 1000);
+        }
+        return;
+      }
       const [list, all] = await Promise.all([
         api("/applications", applications),
         api("/services", catalog),
@@ -165,28 +178,22 @@ export default function App() {
       setBusy(false);
     }
   }
-  async function login(password?: string) {
+  async function login(password: string) {
     setBusy(true);
     setError("");
     try {
       const result = await api(
-        password === undefined ? "/public-demo/session" : "/session",
+        "/session",
         z.object({ token: z.string(), expires_in: z.number() }),
         "POST",
-        password === undefined ? undefined : { password },
+        { password },
       );
-      setToken(result.token, password === undefined);
-      setDemo(password === undefined);
-      if (password === undefined) {
-        setAppId("demo");
-        setPage("Dashboard");
-        setApps([]);
-        setServices([]);
-        setNames({});
-      }
+      setToken(result.token);
+      setDemo(false);
+      setPage("Dashboard");
       setExpiry(Date.now() + result.expires_in * 1000);
       setShowLogin(false);
-      setNotice(password === undefined ? "Your private demo is ready." : "Signed in as workspace operator.");
+      setNotice("Signed in as workspace operator.");
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -232,7 +239,7 @@ export default function App() {
         </div>
         <div className="navLabel">Workspace</div>
         <nav aria-label="Workspace navigation">
-          {navigation.filter(({ name }) => !demo || name === "Dashboard" || name === "Service details").map(({ name, icon: Icon }) => (
+          {navigation.filter(({ name }) => expiry && (operator || name !== "Applications")).map(({ name, icon: Icon }) => (
             <button
               key={name}
               aria-current={name === page ? "page" : undefined}
@@ -256,7 +263,7 @@ export default function App() {
       <main>
         <div className="topbar">
           <div>
-            <span>Workspace</span>
+            <span>{demo ? "Demo Mode" : "Workspace"}</span>
             <ChevronRight />
             {page}
           </div>
@@ -264,18 +271,9 @@ export default function App() {
             className={operator ? "sessionButton active" : "sessionButton"}
             aria-label={operator ? "Sign out" : "Operator sign-in"}
             title={operator ? "Sign out" : undefined}
-            disabled={busy}
+            disabled={busy || (!expiry && loading)}
             onClick={() => {
               if (operator) { void logout(); return; }
-              if (demo) {
-                setToken("");
-                setDemo(false);
-                setExpiry(0);
-                setApps([]);
-                setServices([]);
-                setPage("Dashboard");
-                setNotice("");
-              }
               setShowLogin((v) => !v);
             }}
           >
@@ -330,19 +328,25 @@ export default function App() {
                   "Sign in"
                 )}
               </button>
-              <button type="button" disabled={busy || !showLogin} onClick={() => void login()}>Explore live demo</button>
+
               <button type="button" onClick={() => setShowLogin(false)}>
                 Cancel
               </button>
             </form>
           </OperatorDialog>
+          {demo && welcome && <div className="notice">
+            Explore this interactive prototype. Services, metrics, logs and incidents are simulated in your private session.
+            <button onClick={() => setTour(!tour)}>{tour ? "Close guide" : "Quick guide"}</button>
+            <button onClick={() => setWelcome(false)}>Dismiss</button>
+            {tour && <p>Open Service details and simulate a failure. Investigate its evidence, prepare and confirm an incident, then resolve it in Incidents.</p>}
+          </div>}
           <header className="pageHead">
             <div>
               <h1>
                 {page === "Dashboard"
                   ? "Monitoring overview"
                   : page === "Investigator"
-                    ? "AI Investigator"
+                    ? demo ? "Demo analysis" : "AI Investigator"
                     : page}
               </h1>
               <p>
@@ -425,13 +429,14 @@ export default function App() {
           {page === "Service details" && props && service && (
             <Details {...props} service={service} />
           )}
-          {!demo && app && service && (
+          {app && service && (
             <div hidden={page !== "Investigator"}>
               <Investigator
                 key={app.id + service.id + expiry}
                 app={app}
                 service={service}
-                operator={operator}
+                demo={demo}
+                operator={operator || demo}
                 openHistory={() => navigate("Incidents")}
               />
             </div>
@@ -447,7 +452,7 @@ export default function App() {
           {page === "Incidents" && (
             <History
               key={expiry + "-" + revision}
-              operator={operator}
+              operator={operator || demo}
               names={names}
             />
           )}

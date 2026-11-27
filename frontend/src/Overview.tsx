@@ -94,7 +94,7 @@ export function Overview(p: Props) {
           {(p.operator || p.demo) && p.app.id === "demo" && (
             <button disabled={p.busy} onClick={() => p.simulate("")}>
               <RotateCcw />
-              Reset all to healthy
+              {p.demo ? "Reset demo workspace" : "Reset all to healthy"}
             </button>
           )}
         </header>
@@ -141,7 +141,7 @@ export function Overview(p: Props) {
                     </td>
                     <td>{s.checkedAt ? clock(s.checkedAt) : "—"}</td>
                     <td>
-                      <button className="quiet" disabled={p.demo} title={p.demo ? "AI investigations require operator sign-in" : undefined} onClick={() => p.investigate(s)}>
+                      <button className="quiet" onClick={() => p.investigate(s)}>
                         <ScanSearch />
                         Investigate
                       </button>
@@ -197,7 +197,7 @@ export function Details(p: Props & { service: Service }) {
             <h2>{s.name}</h2>
             <p>{h?.explanation ?? h?.message ?? s.health.error}</p>
           </div>
-          <button className="primary" disabled={p.demo} title={p.demo ? "AI investigations require operator sign-in" : undefined} onClick={() => p.investigate(s)}>
+          <button className="primary" onClick={() => p.investigate(s)}>
             <ScanSearch />
             Investigate
           </button>

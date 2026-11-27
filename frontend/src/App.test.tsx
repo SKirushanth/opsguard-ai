@@ -69,7 +69,7 @@ it("investigates, reviews a draft, and saves only after explicit confirmation", 
     status: "open",
   };
   const fetcher = vi.fn(async (input: string, init: RequestInit) => {
-    const path = new URL(input).pathname;
+    const path = new URL(input).pathname.replace("/public-demo/", "/");
     if (path === "/api/session")
       return ok({ token: "session-test", expires_in: 3600 });
     if (path === "/api/applications") return ok([demo]);
@@ -155,7 +155,7 @@ it("supports unknown status on dashboard and custom mapping workflow in Applicat
   const registeredPayloads: unknown[] = [];
 
   const fetcher = vi.fn(async (input: string, init?: RequestInit) => {
-    const path = new URL(input).pathname;
+    const path = new URL(input).pathname.replace("/public-demo/", "/");
     if (path === "/api/session")
       return ok({ token: "session-test", expires_in: 3600 });
     if (path === "/api/applications" && init?.method === "POST") {
@@ -317,9 +317,8 @@ it("opens a private demo from sign-in and returns to operator sign-in", async ()
   });
   vi.stubGlobal("fetch", fetcher);
   render(<App />);
-  fireEvent.click(screen.getByRole("button", {name:"Operator sign-in"}));
-  fireEvent.click(screen.getByRole("button", {name:"Explore live demo"}));
-  await screen.findByText("Demo Mode");
+  await screen.findAllByText("Demo Mode");
+  expect(fetcher.mock.calls.every(([input]) => new URL(input).pathname.startsWith("/api/public-demo/"))).toBe(true);
   await screen.findByText("Order Service");
   expect(screen.queryByRole("button", {name:"Applications"})).toBeNull();
   fireEvent.click(screen.getByRole("button", {name:"Operator sign-in"}));
