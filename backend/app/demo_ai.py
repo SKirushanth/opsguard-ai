@@ -1,5 +1,6 @@
 ﻿"""Short-lived evidence snapshots for the hosted agent's existing read-only tools."""
 import asyncio
+import logging
 import os
 import secrets
 from collections import deque
@@ -14,6 +15,7 @@ from investigation import Evidence, Investigation, REFERENCE_FORMAT
 from .access import matches
 
 router = APIRouter(prefix="/api/services")
+logger = logging.getLogger("uvicorn.error").getChild("demo_ai")
 
 
 class Budget:
@@ -54,15 +56,18 @@ async def tool_read(snapshot_id: str, resource: Literal["health", "logs", "metri
 
 async def investigate(request, payload, session, observations):
     ev = Evidence.collect(payload.service_id, observations, [])
-    fallback = {"session_id": payload.session_id, "mode":"demo", "response":ev.render(None)}
+    def fallback(reason: str):
+        logger.info("demo_ai_fallback reason=%s", reason)
+        return {"session_id": payload.session_id, "mode": "demo", "response": ev.render(None)}
+
     key = os.getenv("AGENT_API_KEY")
     url = request.app.state.agent_chat_url
     budget = request.app.state.demo_ai
     if not (key and url.startswith("https://") and os.getenv("MONITORING_API_KEY")):
-        return fallback
+        return fallback("agent_configuration_incomplete")
     # Use the transport peer, never a visitor-supplied forwarding header.
     if not budget.reserve(session, request.client.host if request.client else "unknown"):
-        return fallback
+        return fallback("usage_limit")
     alias = "demo-ai-" + secrets.token_hex(12)
     reads = []
     budget.active[alias] = observations, reads
@@ -74,13 +79,23 @@ async def investigate(request, payload, session, observations):
             })
         reply.raise_for_status()
         receipt = Investigation.model_validate_json(reply.json()["response"])
-        if receipt.service_id != alias or not set(receipt.resources).issubset(reads):
-            return fallback
+        if receipt.service_id != alias:
+            return fallback("wrong_service")
+        if "health" not in reads or not set(receipt.resources).issubset(reads):
+            return fallback("unverified_tool_reads")
         verified = Evidence.collect(payload.service_id, {r: observations[r] for r in receipt.resources}, [])
-        if not receipt.selection or not verified.accepts(receipt.selection) or "health" not in reads:
-            return fallback
+        if not receipt.selection:
+            return fallback("missing_selection")
+        if not verified.accepts(receipt.selection):
+            return fallback("unsupported_selection")
         return {"session_id":payload.session_id, "mode":"live", "response":ev.render(receipt.selection)}
-    except (httpx.HTTPError, TimeoutError, ValidationError, ValueError, KeyError, TypeError):
-        return fallback
+    except httpx.HTTPStatusError as exc:
+        return fallback(f"agent_http_{exc.response.status_code}")
+    except (httpx.TimeoutException, TimeoutError):
+        return fallback("agent_timeout")
+    except httpx.HTTPError:
+        return fallback("agent_transport_error")
+    except (ValidationError, ValueError, KeyError, TypeError):
+        return fallback("invalid_receipt")
     finally:
         budget.active.pop(alias, None)

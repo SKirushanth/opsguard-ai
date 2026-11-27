@@ -12,7 +12,7 @@ ALLOWED_HEALTH_STATUSES = {"healthy", "degraded", "down", "unknown"}
 class ServiceInput(BaseModel):
     service: str = Field(
         pattern=r"^[a-z][a-z0-9-]{0,63}$",
-        description="Lowercase monitoring service ID, such as auth, orders, or notifications.",
+        description="Exact server-selected monitoring service ID when provided. Temporary demo-ai- IDs are valid.",
     )
 
 

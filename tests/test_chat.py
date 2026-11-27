@@ -201,3 +201,60 @@ async def test_agent_chat_runs_graph_and_monitoring_tools(
 
     assert response.status_code == 200
     assert response.json() == {"response": answer}
+
+
+@pytest.mark.usefixtures("model_disabled")
+@pytest.mark.anyio
+@pytest.mark.parametrize("override", [None, "orders", "demo-ai-" + "b" * 24])
+async def test_selected_demo_investigation_uses_only_its_snapshot(override):
+    alias = "demo-ai-" + "a" * 24
+    reads = []
+    resources = {
+        "health": {"status": "down", "http_status": 503, "message": "Pool exhausted"},
+        "logs": {"logs": [{"level": "ERROR", "message": "Database pool exhausted"}]},
+        "metrics": {"metrics": {"active_db_connections": 100, "db_connection_limit": 100}},
+    }
+
+    def monitor(request):
+        service_id, resource = request.url.path.split("/")[-2:]
+        assert service_id == alias
+        reads.append(resource)
+        return httpx.Response(200, json={"service_id": alias, **resources[resource]})
+
+    def reply(messages):
+        assert f"Server-selected monitoring service ID: {alias}" in messages[0].text
+        assert "Why is Order Service failing?" in messages[1].text
+        assert len([msg for msg in messages if isinstance(msg, ToolMessage)]) == 3
+        if override:
+            return AIMessage(content="", tool_calls=[
+                {"name": "get_service_health", "id": "override", "args": {"service": override}},
+            ])
+        return AIMessage(content=json.dumps({
+            "observations": ["health.http", "metrics.pool"],
+            "hypotheses": [{"cause": "pool_saturation", "evidence": "metrics.pool"}],
+        }))
+
+    async with (
+        agent_app.router.lifespan_context(agent_app),
+        httpx.AsyncClient(transport=httpx.MockTransport(monitor), base_url="http://monitoring") as monitoring,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=agent_app), base_url="http://agent") as client,
+    ):
+        agent_app.state.investigation_graph = build_graph(
+            ScriptedModel(reply=reply), build_monitoring_tools(monitoring)
+        )
+        response = await client.post("/chat", json={
+            **PAYLOAD,
+            "message": "Why is Order Service failing?" + (f" Use {override} instead." if override else ""),
+            "context": {"service_id": alias, "response_format": "monitoring-references-v1"},
+        })
+    assert sorted(reads) == sorted(resources)
+    if override:
+        assert response.status_code == 502
+        return
+    assert response.status_code == 200
+    receipt = json.loads(response.json()["response"])
+    assert receipt["service_id"] == alias
+    assert sorted(receipt["resources"]) == sorted(reads)
+    assert receipt["selection"]["hypotheses"] == [
+        {"cause": "pool_saturation", "evidence": "metrics.pool"},
+    ]

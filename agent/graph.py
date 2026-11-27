@@ -36,10 +36,18 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
         messages = state["messages"]
         options = config.get("configurable", {})
         selected = options.get("service_id")
+        demo = bool(selected and selected.startswith("demo-ai-"))
         prior_calls = {
             call["id"]: call for msg in messages if isinstance(msg, AIMessage) for call in msg.tool_calls
         }
         results = [msg for msg in messages if isinstance(msg, ToolMessage)]
+        if demo and not prior_calls:
+            # The visitor's target is already known. Collect its frozen evidence
+            # before asking the model to select references.
+            return {"messages": [AIMessage(content="", tool_calls=[
+                {"name": "get_service_" + resource, "id": uuid4().hex, "args": {"service": selected}}
+                for resource in ("health", "logs", "metrics")
+            ])]}
         observed, resources, errors = {}, [], []
         for msg in results:
             call = prior_calls[msg.tool_call_id]
@@ -56,7 +64,10 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
         evidence = Evidence.collect(selected or "", observed, errors)
 
         def finish(selection=None):
-            investigation = Investigation(service_id=selected, resources=resources, selection=selection)
+            cited_resources = list(observed) if demo else resources
+            if demo and "health" not in observed:
+                raise InvalidModelResponse("Selected demo health evidence is unavailable.")
+            investigation = Investigation(service_id=selected, resources=cited_resources, selection=selection)
             text = evidence.render(selection, draft=options.get("draft", False))
             if not observed and errors:
                 text = " ".join(dict.fromkeys(errors))
@@ -85,6 +96,8 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
             return finish()
 
         prompt = SYSTEM_PROMPT
+        if options.get("service_id"):
+            prompt += "\nServer-selected monitoring service ID: " + options["service_id"]
         if results:
             # Only application-generated IDs and allowed categories enter the system message.
             catalog = {
