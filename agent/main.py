@@ -42,6 +42,21 @@ from .tools import build_monitoring_tools
 
 logger = logging.getLogger("uvicorn.error").getChild("opsguard.agent")
 
+PROVIDER_REJECTION_CODES = {
+    "invalid_request_error", "model_not_found", "tool_use_failed",
+    "context_length_exceeded", "invalid_argument", "unsupported_parameter",
+}
+
+
+def log_model_request_rejection(error: APIStatusError) -> None:
+    # The upstream error body can include prompts, generated tool arguments and keys.
+    code = error.code
+    safe_code = code if isinstance(code, str) and code in PROVIDER_REJECTION_CODES else "unknown"
+    logger.warning(
+        "model_request_rejected error_type=%s provider_status=%d provider_code=%s",
+        type(error).__name__, error.status_code, safe_code,
+    )
+
 
 class ChatRequest(BaseModel):
     message: Annotated[
@@ -139,7 +154,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             detail="The language model is unavailable. Check provider access and quota.",
         ) from exc
     except (BadRequestError, NotFoundError, UnprocessableEntityError) as exc:
-        logger.warning("model_request_rejected error_type=%s", type(exc).__name__)
+        log_model_request_rejection(exc)
         raise HTTPException(
             status_code=502,
             detail="The provider rejected the request. Check the model, base URL, and support for tool calling.",

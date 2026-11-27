@@ -10,15 +10,26 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import BaseTool
+from openai import BadRequestError
 
 from agent.graph import build_graph
-from agent.main import app as agent_app
+from agent.main import app as agent_app, log_model_request_rejection
 from agent.tools import build_monitoring_tools
 from backend.app.main import app as backend_app
 from backend.app.routes.chat import get_agent_client
 
 AGENT_URL = "http://agent.example.test/chat"
 PAYLOAD = {"message": "Why is the order service failing?", "session_id": "test-001"}
+
+
+@pytest.mark.parametrize(("code", "expected"), [("tool_use_failed", "tool_use_failed"), ("test-secret", "unknown")])
+def test_model_rejection_log_excludes_provider_payload(caplog, code, expected):
+    response = httpx.Response(400, request=httpx.Request("POST", AGENT_URL))
+    error = BadRequestError("raw error with test-secret", response=response,
+                            body={"code": code, "failed_generation": "test-secret"})
+    log_model_request_rejection(error)
+    assert f"provider_status=400 provider_code={expected}" in caplog.text
+    assert "test-secret" not in caplog.text
 
 
 @pytest.fixture
