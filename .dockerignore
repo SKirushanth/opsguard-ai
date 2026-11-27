@@ -1,0 +1,11 @@
+**
+!investigation.py
+!backend/
+!backend/__init__.py
+!backend/requirements.txt
+!backend/app/
+!backend/app/*.py
+!backend/app/routes/
+!backend/app/routes/*.py
+!backend/app/data/
+!backend/app/data/*.json

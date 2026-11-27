@@ -1,0 +1,34 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "127.0.0.1:${BACKEND_HOST_PORT:-8001}:8001"
+    environment:
+      OPERATOR_PASSWORD: ${OPERATOR_PASSWORD:-}
+      PROTECT_READS: "${PROTECT_READS:-false}"
+      APPROVED_HTTPS_ORIGINS: ${APPROVED_HTTPS_ORIGINS:-}
+      EXTERNAL_BEARER_TOKENS: ${EXTERNAL_BEARER_TOKENS:-}
+      MONITORING_API_KEY: ${MONITORING_API_KEY:-}
+      AGENT_API_KEY: ${AGENT_API_KEY:-}
+      AGENT_CHAT_URL: ${AGENT_CHAT_URL:-http://127.0.0.1:8000/chat}
+      AGENT_CHAT_TIMEOUT_SECONDS: "${AGENT_CHAT_TIMEOUT_SECONDS:-65}"
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+    volumes:
+      - monitoring-data:/data
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:${FRONTEND_HOST_PORT:-8080}:8080"
+    environment:
+      BACKEND_ORIGIN: http://backend:8001
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  monitoring-data:

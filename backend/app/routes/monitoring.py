@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Query
@@ -43,17 +44,31 @@ async def service_health(id: str) -> ServiceHealth:
         status=service.status,
         http_status=service.http_status,
         message=service.message,
+        reason=None,
+        requires_mapping=False,
+        normalization_method="simulated",
+        explanation=service.message,
+        evidence={
+            "status": service.status,
+            "http_status": service.http_status,
+            "message": service.message,
+        },
+        last_checked_at=datetime.now(UTC),
     )
 
 
-@router.get("/{id}/logs", response_model=ServiceLogs)
+@router.get(
+    "/{id}/logs", response_model=ServiceLogs, response_model_exclude_none=True
+)
 async def service_logs(
     id: str, limit: Annotated[int, Query(ge=1, le=100)] = 20
 ) -> ServiceLogs:
     if app := registry.for_service(id):
         result = await external.fetch_external(app, "logs")
         result.logs = sorted(
-            result.logs, key=lambda entry: entry.timestamp, reverse=True
+            result.logs,
+            key=lambda entry: entry.timestamp or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
         )[:limit]
         return result
     if row := scenarios.state(id):

@@ -306,7 +306,7 @@ h4 {
 }
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 16px;
   margin: 1rem 0 1.25rem;
 }
@@ -346,6 +346,9 @@ h4 {
 }
 .down svg {
   color: #f87171;
+}
+.unknown svg {
+  color: #94a3b8;
 }
 .total svg {
   color: #a8b9cd;
@@ -433,6 +436,11 @@ td {
 .level.CRITICAL {
   color: #f87171;
   background: #392020;
+}
+.badge.unknown,
+.level.UNKNOWN {
+  color: #94a3b8;
+  background: rgba(148, 163, 184, 0.14);
 }
 .badge.medium {
   color: #a9c9f4;
@@ -1038,4 +1046,95 @@ td.unavailable {
 }
 .pickerList button[aria-selected="true"] {
   color: #4ade80;
+}
+.mappingChoice {
+  grid-column: 1/-1;
+  display: grid;
+  gap: 0.45rem;
+}
+.fieldHeading {
+  font-size: 0.875rem;
+  font-weight: 550;
+  color: #cbd4dc;
+}
+.radioRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+}
+.inlineChoice {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+.inlineChoice input {
+  display: inline;
+  width: auto;
+  margin: 0;
+}
+.mappingPanel,
+.mappingEditor {
+  grid-column: 1/-1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.9rem;
+  padding: 1rem;
+  border: 1px solid #222925;
+  border-radius: 12px;
+  background: #0d110f;
+}
+.mappingEditor {
+  margin-top: 0.85rem;
+}
+.mappingPanel .actions,
+.mappingPanel .notice,
+.mappingEditor .actions {
+  grid-column: 1/-1;
+  margin: 0;
+}
+.connectionPreview {
+  border-top: 1px solid #1f2421;
+  padding: 1.15rem 1.25rem;
+  display: grid;
+  gap: 0.85rem;
+}
+.connectionPreview .facts {
+  padding: 0;
+}
+.connectionPreview .notice {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+.explanationLine {
+  color: #cbd5e1;
+  font-size: 0.9rem;
+}
+.evidenceBox {
+  padding: 0 1.25rem 1.15rem;
+}
+.connectionPreview .evidenceBox {
+  padding: 0;
+}
+.evidenceBox pre {
+  margin: 0.4rem 0 0;
+  padding: 0.85rem;
+  border-radius: 8px;
+  border: 1px solid #1f2421;
+  background: #0a0d0c;
+  color: #cbd5e1;
+  font-family: "IBM Plex Mono", Consolas, monospace;
+  font-size: 0.82rem;
+  overflow: auto;
+  max-height: 16rem;
+}
+@media (max-width: 760px) {
+  .mappingPanel,
+  .mappingEditor {
+    grid-template-columns: 1fr;
+  }
 }

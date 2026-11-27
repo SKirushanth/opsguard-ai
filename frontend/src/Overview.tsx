@@ -2,6 +2,7 @@ import {
   Activity,
   Network,
   CircleCheck,
+  CircleHelp,
   TriangleAlert,
   CircleX,
   ScanSearch,
@@ -37,6 +38,7 @@ type Props = {
   details: (s: Service) => void;
   simulate: (id: string, scenario?: string) => void;
   operator: boolean;
+  demo: boolean;
   busy: boolean;
 };
 
@@ -52,6 +54,7 @@ export function Overview(p: Props) {
       { label: "Healthy", icon: CircleCheck, kind: "healthy" },
       { label: "Degraded", icon: TriangleAlert, kind: "degraded" },
       { label: "Down", icon: CircleX, kind: "down" },
+      { label: "Unknown", icon: CircleHelp, kind: "unknown" },
     ].map((s) => ({
       ...s,
       value: p.services.filter((v) => v.status === s.kind).length,
@@ -61,7 +64,11 @@ export function Overview(p: Props) {
     .flatMap((s) =>
       (s.logs.data?.logs ?? []).map((l) => ({ ...l, name: s.name, id: s.id })),
     )
-    .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+    .sort(
+      (a, b) =>
+        (b.timestamp ? Date.parse(b.timestamp) : 0) -
+        (a.timestamp ? Date.parse(a.timestamp) : 0),
+    )
     .slice(0, 5);
   return (
     <>
@@ -84,7 +91,7 @@ export function Overview(p: Props) {
               {p.app.name} · {p.services.length} monitored
             </p>
           </div>
-          {p.operator && p.app.id === "demo" && (
+          {(p.operator || p.demo) && p.app.id === "demo" && (
             <button disabled={p.busy} onClick={() => p.simulate("")}>
               <RotateCcw />
               Reset all to healthy
@@ -108,39 +115,40 @@ export function Overview(p: Props) {
               </tr>
             </thead>
             <tbody>
-              {p.services.map((s) => (
-                <tr key={s.id}>
-                  <td>
-                    <button className="service" onClick={() => p.details(s)}>
-                      <span className="serviceIcon">
-                        <HeartPulse />
-                      </span>
-                      {s.name}
-                    </button>
-                  </td>
-                  <td>
-                    <Status value={s.status} />
-                  </td>
-                  <td className={s.metrics.data ? undefined : "unavailable"}>
-                    {s.metrics.data
-                      ? s.metrics.data.metrics.avg_latency_ms.toLocaleString() +
-                        " ms"
-                      : "Unavailable"}
-                  </td>
-                  <td className={s.metrics.data ? undefined : "unavailable"}>
-                    {s.metrics.data
-                      ? s.metrics.data.metrics.error_rate_percent + "%"
-                      : "Unavailable"}
-                  </td>
-                  <td>{s.checkedAt ? clock(s.checkedAt) : "—"}</td>
-                  <td>
-                    <button className="quiet" onClick={() => p.investigate(s)}>
-                      <ScanSearch />
-                      Investigate
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {p.services.map((s) => {
+                const avgLatency = s.metrics.data?.metrics.avg_latency_ms;
+                const errorRate = s.metrics.data?.metrics.error_rate_percent;
+                return (
+                  <tr key={s.id}>
+                    <td>
+                      <button className="service" onClick={() => p.details(s)}>
+                        <span className="serviceIcon">
+                          <HeartPulse />
+                        </span>
+                        {s.name}
+                      </button>
+                    </td>
+                    <td>
+                      <Status value={s.status} />
+                    </td>
+                    <td className={avgLatency != null ? undefined : "unavailable"}>
+                      {avgLatency != null
+                        ? avgLatency.toLocaleString() + " ms"
+                        : "Unavailable"}
+                    </td>
+                    <td className={errorRate != null ? undefined : "unavailable"}>
+                      {errorRate != null ? errorRate + "%" : "Unavailable"}
+                    </td>
+                    <td>{s.checkedAt ? clock(s.checkedAt) : "—"}</td>
+                    <td>
+                      <button className="quiet" disabled={p.demo} title={p.demo ? "AI investigations require operator sign-in" : undefined} onClick={() => p.investigate(s)}>
+                        <ScanSearch />
+                        Investigate
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -155,7 +163,9 @@ export function Overview(p: Props) {
         </header>
         {entries.map((l, i) => (
           <div className="log" key={i}>
-            <time title={l.timestamp}>{clock(l.timestamp)}</time>
+            <time title={l.timestamp ?? undefined}>
+              {l.timestamp ? clock(l.timestamp) : "—"}
+            </time>
             <b className={"level " + l.level}>{l.level}</b>
             <span>{l.message}</span>
             <small>{l.name}</small>
@@ -176,6 +186,7 @@ export function Overview(p: Props) {
 
 export function Details(p: Props & { service: Service }) {
   const s = p.service,
+    h = s.health.data,
     m = s.metrics.data?.metrics;
   return (
     <>
@@ -184,13 +195,19 @@ export function Details(p: Props & { service: Service }) {
           <div>
             <Status value={s.status} />
             <h2>{s.name}</h2>
-            <p>{s.health.data?.message ?? s.health.error}</p>
+            <p>{h?.explanation ?? h?.message ?? s.health.error}</p>
           </div>
-          <button className="primary" onClick={() => p.investigate(s)}>
+          <button className="primary" disabled={p.demo} title={p.demo ? "AI investigations require operator sign-in" : undefined} onClick={() => p.investigate(s)}>
             <ScanSearch />
             Investigate
           </button>
         </header>
+        {h?.requires_mapping && (
+          <p className="notice" role="status">
+            Health response format is unrecognized. Configure a custom response
+            mapping on the Applications page.
+          </p>
+        )}
         <dl className="facts">
           <div>
             <dt>Service ID</dt>
@@ -199,36 +216,62 @@ export function Details(p: Props & { service: Service }) {
           <div>
             <dt>Health response</dt>
             <dd>
-              {s.health.data
-                ? "HTTP " + s.health.data.http_status
-                : "Unavailable"}
+              {h?.http_status != null ? "HTTP " + h.http_status : "Unavailable"}
             </dd>
           </div>
+          {h?.normalization_method && (
+            <div>
+              <dt>Normalization</dt>
+              <dd>{h.normalization_method}</dd>
+            </div>
+          )}
           <div>
             <dt>Last checked</dt>
             <dd>{s.checkedAt ? clock(s.checkedAt) : "Unavailable"}</dd>
           </div>
         </dl>
+        {h?.evidence !== undefined && h?.evidence !== null && (
+          <div className="evidenceBox">
+            <small>Sanitized health evidence</small>
+            <pre>
+              {typeof h.evidence === "string"
+                ? h.evidence
+                : JSON.stringify(h.evidence, null, 2)}
+            </pre>
+          </div>
+        )}
       </section>
       <section className="panel">
         <header>
           <h2>Performance metrics</h2>
         </header>
-        {m ? (
+        {m && s.metrics.data?.available !== false ? (
           <dl className="facts">
             <div>
               <dt>Average latency</dt>
-              <dd>{m.avg_latency_ms} ms</dd>
+              <dd>
+                {m.avg_latency_ms != null
+                  ? m.avg_latency_ms + " ms"
+                  : "Unavailable"}
+              </dd>
             </div>
             <div>
               <dt>Error rate</dt>
-              <dd>{m.error_rate_percent}%</dd>
+              <dd>
+                {m.error_rate_percent != null
+                  ? m.error_rate_percent + "%"
+                  : "Unavailable"}
+              </dd>
             </div>
             <div>
               <dt>Requests / 5 min</dt>
-              <dd>{m.requests_last_5m}</dd>
+              <dd>
+                {m.requests_last_5m != null
+                  ? m.requests_last_5m
+                  : "Unavailable"}
+              </dd>
             </div>
-            {m.active_db_connections !== undefined && (
+            {m.active_db_connections != null && (
               <div>
                 <dt>Active connections</dt>
                 <dd>
@@ -238,7 +281,11 @@ export function Details(p: Props & { service: Service }) {
             )}
           </dl>
         ) : (
-          <p className="empty">{s.metrics.error}</p>
+          <p className="empty">
+            {s.metrics.error ||
+              s.metrics.data?.explanation ||
+              "Metrics unavailable."}
+          </p>
         )}
       </section>
       <section className="panel">
@@ -247,12 +294,24 @@ export function Details(p: Props & { service: Service }) {
         </header>
         {s.logs.data?.logs.map((l, i) => (
           <div className="log" key={i}>
-            <time>{clock(l.timestamp)}</time>
+            <time title={l.timestamp ?? undefined}>
+              {l.timestamp ? clock(l.timestamp) : "—"}
+            </time>
             <b className={"level " + l.level}>{l.level}</b>
             <span>{l.message}</span>
           </div>
         ))}
-        {!s.logs.data?.logs.length && (
+        {!s.logs.data?.logs.length && s.logs.data?.raw_evidence != null && (
+          <div className="evidenceBox">
+            <small>Sanitized log evidence</small>
+            <pre>
+              {typeof s.logs.data.raw_evidence === "string"
+                ? s.logs.data.raw_evidence
+                : JSON.stringify(s.logs.data.raw_evidence, null, 2)}
+            </pre>
+          </div>
+        )}
+        {!s.logs.data?.logs.length && s.logs.data?.raw_evidence == null && (
           <p className="empty">{s.logs.error || "No recent entries."}</p>
         )}
       </section>
@@ -262,7 +321,7 @@ export function Details(p: Props & { service: Service }) {
             <div>
               <h2>Failure simulation</h2>
               <p>
-                {p.operator
+                {p.demo ? "Changes apply only to your demo session." : p.operator
                   ? "Scenario changes affect the shared demo."
                   : "Sign in as operator to change the demo."}
               </p>
@@ -270,14 +329,14 @@ export function Details(p: Props & { service: Service }) {
           </header>
           <div className="actions">
             <button
-              disabled={!p.operator || p.busy}
+              disabled={(!p.operator && !p.demo) || p.busy}
               onClick={() => p.simulate(s.id, failures[s.id])}
             >
               <FlaskConical />
               Simulate failure
             </button>
             <button
-              disabled={!p.operator || p.busy}
+              disabled={(!p.operator && !p.demo) || p.busy}
               onClick={() => p.simulate(s.id)}
             >
               <RotateCcw />

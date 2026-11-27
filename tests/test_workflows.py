@@ -148,11 +148,16 @@ def test_draft_is_read_only_and_proxy_uses_cloud_key(client, auth, valid, monkey
     def respond(request):
         assert request.headers["X-API-Key"] == "gateway-test"
         payload = json.loads(request.content)
-        assert payload["context"] == {"service_id": "orders"}
+        assert payload["context"] == {"service_id": "orders", "response_format": "monitoring-references-v1"}
         assert "gateway-test" not in request.content.decode()
-        return httpx.Response(
-            200, json={"response": json.dumps(REPORT) if valid else "No evidence."}
-        )
+        result = {"response": json.dumps(REPORT) if valid else "No evidence."}
+        if valid:
+            result["response"] = json.dumps({
+                "service_id": "orders", "resources": ["health", "metrics"],
+                "selection": {"observations": ["health.http", "metrics.pool"], "hypotheses": [
+                    {"cause": "pool_saturation", "evidence": "metrics.pool"}]},
+            })
+        return httpx.Response(200, json=result)
 
     upstream = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     monkeypatch.setitem(app.dependency_overrides, get_agent_client, lambda: upstream)
@@ -169,9 +174,11 @@ def test_draft_is_read_only_and_proxy_uses_cloud_key(client, auth, valid, monkey
     assert result.status_code == (200 if valid else 502)
     if valid:
         assert result.json() == {
-            **REPORT,
-            "application_id": "demo",
-            "service_id": "orders",
+            "application_id": "demo", "service_id": "orders",
+            "title": "Investigation of orders", "description": "Monitored health for orders: down.",
+            "severity": "high", "evidence": ["[health.http] HTTP 503", "[metrics.pool] Database pool 100/100 connections"],
+            "likely_root_cause": "Database pool saturation may be delaying requests. [metrics.pool]",
+            "recommendations": ["Inspect active connections and pool wait times."],
         }
     assert client.get("/api/incidents").json() == []
 

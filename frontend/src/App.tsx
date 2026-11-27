@@ -52,12 +52,13 @@ export default function App() {
   const [loading, setLoading] = useState(true),
     [loadError, setLoadError] = useState(""),
     [revision, setRevision] = useState(0);
-  const [expiry, setExpiry] = useState(0),
+  const [demo, setDemo] = useState(false),
+    [expiry, setExpiry] = useState(0),
     [showLogin, setShowLogin] = useState(false),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(""),
     [error, setError] = useState("");
-  const operator = expiry > 0,
+  const operator = expiry > 0 && !demo,
     app = apps.find((a) => a.id === appId),
     service = services.find((s) => s.id === serviceId) ?? services[0];
   useEffect(() => {
@@ -68,7 +69,9 @@ export default function App() {
         setExpiry(0);
         setApps([]);
         setServices([]);
-        setNotice("Operator session expired. Sign in again.");
+        setDemo(false);
+        setPage("Dashboard");
+        setNotice("Session expired. Choose a new session to continue.");
       },
       Math.max(0, expiry - Date.now()),
     );
@@ -162,20 +165,28 @@ export default function App() {
       setBusy(false);
     }
   }
-  async function login(password: string) {
+  async function login(password?: string) {
     setBusy(true);
     setError("");
     try {
       const result = await api(
-        "/session",
+        password === undefined ? "/public-demo/session" : "/session",
         z.object({ token: z.string(), expires_in: z.number() }),
         "POST",
-        { password },
+        password === undefined ? undefined : { password },
       );
-      setToken(result.token);
+      setToken(result.token, password === undefined);
+      setDemo(password === undefined);
+      if (password === undefined) {
+        setAppId("demo");
+        setPage("Dashboard");
+        setApps([]);
+        setServices([]);
+        setNames({});
+      }
       setExpiry(Date.now() + result.expires_in * 1000);
       setShowLogin(false);
-      setNotice("Signed in as workspace operator.");
+      setNotice(password === undefined ? "Your private demo is ready." : "Signed in as workspace operator.");
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -203,6 +214,7 @@ export default function App() {
         app,
         services,
         operator,
+        demo,
         busy: busy || loading,
         investigate: (s: Service) => openService(s, "Investigator"),
         details: (s: Service) => openService(s, "Service details"),
@@ -220,7 +232,7 @@ export default function App() {
         </div>
         <div className="navLabel">Workspace</div>
         <nav aria-label="Workspace navigation">
-          {navigation.map(({ name, icon: Icon }) => (
+          {navigation.filter(({ name }) => !demo || name === "Dashboard" || name === "Service details").map(({ name, icon: Icon }) => (
             <button
               key={name}
               aria-current={name === page ? "page" : undefined}
@@ -234,9 +246,9 @@ export default function App() {
         <div className="identity" key={operator ? "operator" : "guest"}>
           <CircleUserRound />
           <div>
-            <strong>{operator ? "Operator" : "Guest access"}</strong>
+            <strong>{demo ? "Demo Mode" : operator ? "Operator Mode" : "Guest access"}</strong>
             <small>
-              {operator ? "Workspace session" : "Read-only session"}
+              {demo ? "Private simulation" : operator ? "Workspace session" : "Read-only session"}
             </small>
           </div>
         </div>
@@ -253,7 +265,19 @@ export default function App() {
             aria-label={operator ? "Sign out" : "Operator sign-in"}
             title={operator ? "Sign out" : undefined}
             disabled={busy}
-            onClick={() => (operator ? void logout() : setShowLogin((v) => !v))}
+            onClick={() => {
+              if (operator) { void logout(); return; }
+              if (demo) {
+                setToken("");
+                setDemo(false);
+                setExpiry(0);
+                setApps([]);
+                setServices([]);
+                setPage("Dashboard");
+                setNotice("");
+              }
+              setShowLogin((v) => !v);
+            }}
           >
             <ShieldCheck />
             {operator ? (
@@ -306,6 +330,7 @@ export default function App() {
                   "Sign in"
                 )}
               </button>
+              <button type="button" disabled={busy || !showLogin} onClick={() => void login()}>Explore live demo</button>
               <button type="button" onClick={() => setShowLogin(false)}>
                 Cancel
               </button>
@@ -400,7 +425,7 @@ export default function App() {
           {page === "Service details" && props && service && (
             <Details {...props} service={service} />
           )}
-          {app && service && (
+          {!demo && app && service && (
             <div hidden={page !== "Investigator"}>
               <Investigator
                 key={app.id + service.id + expiry}

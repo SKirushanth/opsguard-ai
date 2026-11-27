@@ -1,0 +1,12 @@
+**
+!package.json
+!package-lock.json
+!vite.config.ts
+!tsconfig.json
+!index.html
+!src/
+!src/*.ts
+!src/*.tsx
+!src/*.css
+src/*.test.*
+!nginx.conf.template

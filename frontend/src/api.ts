@@ -4,8 +4,10 @@ export const base = (
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8001"
 ).replace(/\/$/, "");
 let token = "";
-export function setToken(value: string) {
+let demoSession = false;
+export function setToken(value: string, demo = false) {
   token = value;
+  demoSession = demo;
 }
 export class ApiError extends Error {
   constructor(
@@ -24,7 +26,7 @@ export async function api<T>(
 ): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(base + "/api" + path, {
+    response = await fetch(base + (demoSession ? "/api/public-demo" : "/api") + path, {
       method,
       headers: {
         ...(body !== undefined && { "Content-Type": "application/json" }),
@@ -61,41 +63,66 @@ export async function api<T>(
   return parsed.data;
 }
 
-const status = z.enum(["healthy", "degraded", "down"]);
+const status = z.enum(["healthy", "degraded", "down", "unknown"]);
+const mappingValue = z.union([z.string(), z.boolean()]);
+export const customMapping = z.object({
+  status_field: z.string(),
+  healthy_values: z.array(mappingValue),
+  down_values: z.array(mappingValue),
+  degraded_values: z.array(mappingValue),
+});
+export type CustomMapping = z.infer<typeof customMapping>;
+
 export const catalog = z.object({
   services: z.array(
     z.object({
       id: z.string(),
       name: z.string(),
-      status: z.enum([...status.options, "unknown"]),
+      status,
     }),
   ),
 });
 export const health = z.object({
   service_id: z.string(),
   status,
-  http_status: z.number(),
+  http_status: z.number().nullable(),
   message: z.string(),
+  reason: z.string().nullable().optional(),
+  requires_mapping: z.boolean().optional(),
+  normalization_method: z.string().optional(),
+  explanation: z.string().nullable().optional(),
+  evidence: z.unknown().optional(),
+  last_checked_at: z.string().nullable().optional(),
+  error_category: z.string().nullable().optional(),
 });
 export const logs = z.object({
   service_id: z.string(),
   logs: z.array(
     z.object({
-      timestamp: z.iso.datetime({ offset: true }),
+      timestamp: z.iso.datetime({ offset: true }).nullable().optional(),
       level: z.string(),
       message: z.string(),
     }),
   ),
+  format: z.enum(["json", "text", "unrecognized"]).nullable().optional(),
+  available: z.boolean().nullable().optional(),
+  raw_evidence: z.unknown().optional(),
+  explanation: z.string().nullable().optional(),
 });
 export const metrics = z.object({
   service_id: z.string(),
   metrics: z.object({
-    avg_latency_ms: z.number(),
-    error_rate_percent: z.number(),
-    requests_last_5m: z.number(),
-    active_db_connections: z.number().optional(),
-    db_connection_limit: z.number().optional(),
+    avg_latency_ms: z.number().nullable().optional(),
+    error_rate_percent: z.number().nullable().optional(),
+    requests_last_5m: z.number().nullable().optional(),
+    active_db_connections: z.number().nullable().optional(),
+    db_connection_limit: z.number().nullable().optional(),
   }),
+  available: z.boolean().nullable().optional(),
+  unavailable_fields: z.array(z.string()).nullable().optional(),
+  unrecognized_fields: z.array(z.string()).nullable().optional(),
+  raw_evidence: z.unknown().optional(),
+  explanation: z.string().nullable().optional(),
 });
 export const application = z.object({
   id: z.string(),
@@ -105,9 +132,27 @@ export const application = z.object({
   health_path: z.string().nullable(),
   logs_path: z.string().nullable(),
   metrics_path: z.string().nullable(),
+  last_status: status.optional(),
+  health_mapping: customMapping.nullable().optional(),
 });
 export const applications = z.array(application);
 export type Application = z.infer<typeof application>;
+
+export const connectionTestResult = z.object({
+  connected: z.boolean(),
+  connection_result: z.string(),
+  http_status: z.number().nullable(),
+  sanitized_response: z.unknown().nullable().optional(),
+  normalized_status: status,
+  normalization_method: z.string(),
+  explanation: z.string(),
+  reason: z.string().nullable().optional(),
+  requires_mapping: z.boolean(),
+  error_category: z.string().nullable().optional(),
+  checked_at: z.string(),
+});
+export type ConnectionTestResult = z.infer<typeof connectionTestResult>;
+
 export const draft = z.object({
   application_id: z.string(),
   service_id: z.string(),
@@ -157,7 +202,7 @@ export async function readService(
     health: h,
     logs: l,
     metrics: m,
-    checkedAt: h.data ? new Date().toISOString() : null,
+    checkedAt: h.data?.last_checked_at ?? (h.data ? new Date().toISOString() : null),
   };
 }
 export type Service = Awaited<ReturnType<typeof readService>>;

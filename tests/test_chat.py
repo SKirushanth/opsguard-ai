@@ -54,8 +54,10 @@ async def test_backend_forwards_chat(monkeypatch: pytest.MonkeyPatch) -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
         assert request.url == AGENT_URL
-        assert json.loads(request.content) == {**PAYLOAD, "context": {}}
-        return httpx.Response(200, json={"response": "Investigation results."})
+        assert json.loads(request.content) == {**PAYLOAD, "context": {"response_format": "monitoring-references-v1"}}
+        return httpx.Response(200, json={"response": json.dumps({
+            "service_id": "orders", "resources": ["health"], "selection": None,
+        })})
 
     async with (
         backend_app.router.lifespan_context(backend_app),
@@ -66,7 +68,7 @@ async def test_backend_forwards_chat(monkeypatch: pytest.MonkeyPatch) -> None:
         response = await gateway.post("/api/chat", json=PAYLOAD)
 
     assert response.status_code == 200
-    assert response.json() == {"response": "Investigation results.", "session_id": "test-001"}
+    assert response.json() == {"response": "Monitored health for orders: down.\n\nObserved evidence\n\n[health.http] HTTP 503", "session_id": "test-001"}
 
 
 @pytest.mark.anyio
@@ -133,11 +135,11 @@ class ScriptedModel(BaseChatModel):
     [
         (
             PAYLOAD["message"], "orders", ("health", "logs", "metrics"), False,
-            "Simulated evidence: HTTP 503, 42.0% errors, pool 100/100.",
+            "Monitored health for orders: down.\n\nObserved evidence\n\n[health.http] HTTP 503\n\n[metrics.error_rate_percent] Error rate 42.0%\n\n[metrics.pool] Database pool 100/100 connections",
         ),
         (
             "Is the auth service healthy?", "auth", ("health",), False,
-            "Simulated evidence: auth is healthy.",
+            "Monitored health for auth: healthy.\n\nObserved evidence\n\n[health.http] HTTP 200",
         ),
         (
             "Investigate the billing service.", "billing", ("health",), False,
@@ -177,10 +179,11 @@ async def test_agent_chat_runs_graph_and_monitoring_tools(
             return AIMessage(content=f"Simulated evidence: auth is {evidence['health']['status']}.")
         assert any("pool exhausted" in entry["message"] for entry in evidence["logs"]["logs"])
         health, metrics = evidence["health"], evidence["metrics"]["metrics"]
-        return AIMessage(content=(
-            f"Simulated evidence: HTTP {health['http_status']}, {metrics['error_rate_percent']}% errors, "
-            f"pool {metrics['active_db_connections']}/{metrics['db_connection_limit']}."
-        ))
+        assert health["http_status"] == 503 and metrics["error_rate_percent"] == 42.0
+        return AIMessage(content=json.dumps({
+            "observations": ["health.http", "metrics.error_rate_percent", "metrics.pool"],
+            "hypotheses": [],
+        }))
 
     def disconnect(_request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("offline")

@@ -31,6 +31,12 @@ frontend/vercel.json    Frontend production build settings
 .env.example            Server configuration template
 ```
 
+## Run with Docker
+
+From this repository, run `docker compose up --build` and open **http://localhost:8080**. This starts the React/Nginx frontend and the monitoring backend with a persistent SQLite volume. The agent is optional. For operator actions, set `OPERATOR_PASSWORD` in the root `.env` and recreate the backend with `docker compose up -d`. Stop with `docker compose down` to retain the volume.
+
+The Azure configuration deploys these two images from ACR, keeps the backend private, and reserves agent hosting for WSO2. [Local container settings and Azure deployment guide](docs/azure-deployment.md)
+
 ## Local setup
 
 Use Python 3.11 or later and Node 22.12+ or a compatible newer release. From this repository in PowerShell, set up the environment once. Keep an existing local configuration when present.
@@ -84,13 +90,54 @@ The agent can call `get_service_health`, `get_service_logs` and `get_service_met
 
 Select **Prepare incident draft** after an investigation. The agent rechecks the selected service using the preceding answer as background. The backend validates the structured report. Review the evidence, likely cause, severity and recommendations before clicking **Confirm incident creation**. Only the authenticated confirmation endpoint writes the report. An approval UUID makes retries idempotent. The UI displays the persisted ID and lets an operator resolve or reopen the incident.
 
-## Connect another service
+## Connect another service & Universal Monitoring Adapter
 
-1. The operator adds the canonical public HTTPS origin to `APPROVED_HTTPS_ORIGINS` and configures any endpoint-specific bearer tokens on the backend.
-2. Sign in, open **Applications**, and register a name, upstream service ID and health path. Supply logs and metrics paths only if implemented.
-3. Click **Validate** to fetch and validate the health payload. Select **Open dashboard** and inspect or investigate the service. OpsGuard assigns a globally unique ID while the external API continues to return its own local service ID.
+OpsGuard AI separates responsibilities strictly across three layers:
 
-The adapter checks DNS on registration and every read, rejects restricted answers, and connects to a validated public IPv4 address. It preserves the hostname for TLS and the HTTP Host header, disables proxies and redirects, requires identity encoding, and caps each read at five seconds and 64 KiB. Integrations use HTTPS port 443 and fixed paths. An external network firewall can further restrict egress to approved destinations where the hosting environment supports it. Operator-provided evidence should be scrubbed of secrets before it reaches the model provider or trace platform. [External monitoring contract](docs/api-contract.md#external-monitoring-contract)
+- **Python handles deterministic health classification** (`backend/app/normalizer.py`). Routine health checks, connection tests, and mapping validation never invoke the LLM.
+- **Developers configure unfamiliar response formats** using nested JSON field paths and explicit value lists.
+- **AI investigates meaningful monitoring evidence** (logs and unit-safe metrics) without ever guessing or overriding deterministic health status.
+- **Unknown information is never guessed.** Unrecognized or ambiguous health payloads remain `unknown` (`requires_mapping: true`), and missing logs or metrics are marked unavailable rather than zero or "no errors".
+- **WSO2 Agent Manager continues hosting, managing, and observing the AI agent** over the existing `/chat` contract and OpenAI-compatible tool-calling trace spans.
+
+### Setup & registration flow
+
+1. The operator adds the canonical public HTTPS origin to `APPROVED_HTTPS_ORIGINS` and configures any endpoint-specific bearer tokens in `EXTERNAL_BEARER_TOKENS` on the backend.
+2. Sign in, open **Applications**, and enter the application name, service ID, Backend URL, health endpoint, and optional logs/metrics endpoints.
+3. Choose **Automatic response detection** (default) or **Custom response mapping**, and click **Test Connection** to inspect the connection result, actual HTTP status, sanitized response, normalized status, and explanation without saving or calling the LLM.
+4. If the response format is unrecognized (`status: "unknown"`, `requires_mapping: true`), configure custom mapping fields, click **Preview & validate mapping**, and save with **Register application**. Select **Open dashboard** to inspect or investigate the service.
+
+### Normalization priority
+
+Health responses are normalized deterministically into `healthy`, `degraded`, `down`, or `unknown` in strict order:
+
+1. **HTTP and network errors:** Connectivity/DNS/timeout failures (`connectivity_failure`), HTTP 401/403 (`authentication_failure`), blocked 3xx redirects, malformed JSON, and non-503 4xx/5xx endpoint errors (`endpoint_error`) classify as `unknown` without assuming the whole application is down. HTTP 503 is accepted as `down`/`degraded` only when the JSON body consistently confirms it.
+2. **Explicit custom field mappings:** When configured, OpsGuard traverses the dot-separated `status_field` and matches string or boolean values without falling back to automatic detection if the field is missing or unmapped.
+3. **Recognized response patterns:** Automatically detects native OpsGuard health JSON, standard status tokens (`UP`, `OK`, `HEALTHY`, `DEGRADED`, `WARN`, `DOWN`, `OUT_OF_SERVICE`, `ERROR`, `FAIL`), boolean `{"healthy": true|false}`, and consistent nested indicators (`components`, `health`, `data`, `result`, `checks`). Contradictory indicators classify as `unknown` with `requires_mapping: true`.
+4. **Unrecognized fallback:** Returns `status: "unknown"`, `reason: "Unrecognized health response format"`, and `requires_mapping: true`.
+
+### Custom response mapping example
+
+```json
+{
+  "status_field": "application.currentState",
+  "healthy_values": ["ACTIVE"],
+  "down_values": ["INACTIVE"],
+  "degraded_values": ["LIMITED"]
+}
+```
+
+Mappings reject invalid paths, blank entries, and conflicting values across classifications, persist in SQLite via the application registry, and never execute dynamic code.
+
+### Logs, metrics, and AI investigation boundaries
+
+- **Logs:** Supports compatible JSON log arrays/objects and bounded plain-text logs (up to 64 KiB / 100 lines). Unfamiliar JSON log payloads preserve bounded, secret-redacted `raw_evidence`. Missing logs return HTTP 501 / `"Unavailable"` and are never treated as evidence of zero errors.
+- **Metrics:** Normalizes only recognized fields with explicit known units (`error_rate_percent`, `avg_latency_ms`, `requests_last_5m`, `active_db_connections`, `db_connection_limit`). Missing or unitless fields stay unavailable (`null`) and are never invented as `0`. Complex universal metrics mapping is intentionally out of scope for this MVP.
+- **AI investigations** use a short list of evidence references. The model can select observations and supported causes. The gateway reads the referenced resources, validates each citation, then renders monitored health, observations and possible causes separately. If the model supplies prose or an unsupported cause, the answer contains only verified observations. An unknown health result with no diagnostic evidence ends before the diagnosis call. A cited hypothesis still needs operator review.
+
+### Security restrictions
+
+The adapter checks DNS on registration and every read, rejects private, loopback, link-local, multicast, and reserved answers, and connects to a validated public IPv4 address using `Host` and TLS SNI pinning. It uses read-only HTTP `GET`, disables proxies and redirects, requires identity encoding, enforces a 5-second timeout and 64 KiB size cap, and scrubs bearer tokens and secret fields before evidence reaches the frontend or LLM. [External monitoring contract](docs/api-contract.md#external-monitoring-contract)
 
 ## Deploy and verify
 
@@ -115,7 +162,7 @@ npm.cmd run build --prefix frontend
 npm.cmd ls --prefix frontend --depth=0
 ```
 
-The baseline before implementation was **51 passing Python tests**. On November 24, 2026, the expanded suite passed **84 Python tests and 4 frontend tests**. Python compilation, dependency checks, frontend linting, TypeScript and the Vite production build passed. Headless Chrome exercised the production bundle against a disposable local backend, including sign-in, reset, Orders failure, the unavailable-agent error, recovery and a 390-pixel viewport.
+The baseline before implementation was **51 passing Python tests**. On November 24, 2026, the suite passed **84 Python tests and 4 frontend tests**. With the Universal Monitoring Adapter, the expanded suite passes **140 Python tests and 5 frontend tests**, alongside Python compilation, dependency checks, frontend linting, TypeScript checks, and the Vite production build. Headless Chrome previously exercised the production bundle against a disposable local backend, including sign-in, reset, Orders failure, the unavailable-agent error, recovery and a 390-pixel viewport.
 
 The two-server HTTP test ran the real FastAPI processes, LangGraph, HTTP tools and SQLite against a scripted OpenAI-compatible model. It checked the Orders evidence and saved incident ID. A separate test exercised a registered external service through the graph with health and logs available and metrics unavailable. Live provider responses, third-party monitoring endpoints, hosted deployments and WSO2 traces still require credentialed verification.
 
@@ -132,4 +179,4 @@ The two-server HTTP test ran the real FastAPI processes, LangGraph, HTTP tools a
 
 ## MVP limitations and next steps
 
-This is a single-operator workspace with shared demo state. Everyone with an operator session can change that workspace. Sign-in issues a one-hour bearer token kept in browser memory. The agent has read-only tools, and the console chat transcript lasts only within the current service context. An LLM can still misinterpret evidence. Review the report before approving it. External integrations support one service per registration and require compatible JSON. The SQLite design targets a single disk-backed backend instance. For a larger deployment, add per-user roles, login and model-usage rate limits, and database backups.
+This is a single-operator workspace with shared demo state. Everyone with an operator session can change that workspace. Sign-in issues a one-hour bearer token kept in browser memory. The agent has read-only tools, and the console chat transcript lasts only within the current service context. An LLM can still misinterpret evidence. Review the report before approving it. External integrations support one service per registration, custom health field mapping for JSON payloads, bounded plain-text or JSON logs, and unit-known metrics only (complex universal metrics mapping is outside this MVP). The SQLite design targets a single disk-backed backend instance. For a larger deployment, add per-user roles, login and model-usage rate limits, and database backups.

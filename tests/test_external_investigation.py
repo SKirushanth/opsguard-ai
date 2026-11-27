@@ -56,7 +56,10 @@ async def test_registered_service_with_partial_evidence(monkeypatch):
         graph = build_graph(ScriptedModel(reply=reply), build_monitoring_tools(gateway))
         result = await graph.ainvoke({"messages":[HumanMessage(content="Investigate the selected service")]},
                                      config={"configurable":{"service_id":sid}})
-        assert result["messages"][-1].text == "External monitoring reports delayed queues. Metrics monitoring is unavailable for this service."
+        answer = result["messages"][-1].text
+        assert answer.startswith(f"Monitored health for {sid}: degraded.")
+        assert "Queue age high" in answer and "Metrics monitoring is unavailable for this service." in answer
+        assert "External monitoring reports delayed queues." not in answer  # unstructured model prose
         assert sorted(seen) == ["/events","/ready"]
         catalog = (await gateway.get("/api/services")).json()["services"]
         assert next(s for s in catalog if s["id"] == sid)["status"] == "degraded"

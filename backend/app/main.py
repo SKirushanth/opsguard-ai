@@ -12,7 +12,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import access, incidents, registry, scenarios
+from . import access, incidents, public_demo, registry, scenarios
+from .database import database
 from .routes.chat import router as chat_router
 from .routes.monitoring import router as monitoring_router
 from .services import FixtureError, ServiceNotFound
@@ -22,6 +23,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    app.state.demo_sessions = {}
     app.state.agent_chat_url = os.getenv("AGENT_CHAT_URL", "http://127.0.0.1:8000/chat")
     timeout = float(os.getenv("AGENT_CHAT_TIMEOUT_SECONDS", "65"))
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5.0)) as client:
@@ -34,10 +36,11 @@ origins = os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[origin.strip() for origin in origins if origin.strip()],
-    allow_methods=["GET", "POST", "PATCH", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Content-Type", "Authorization"],
 )
 app.include_router(access.router)
+app.include_router(public_demo.router)
 app.include_router(scenarios.router)
 app.include_router(registry.router)
 app.include_router(incidents.router)
@@ -73,6 +76,13 @@ async def fixture_unavailable(_request: Request, exc: FixtureError) -> JSONRespo
 @app.get("/healthz", tags=["system"])
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/readyz", tags=["system"])
+def readyz() -> dict[str, str]:
+    with database() as db:
+        db.execute("SELECT 1 FROM applications LIMIT 1").fetchone()
+    return {"status": "ready"}
 
 
 if __name__ == "__main__":
