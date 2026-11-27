@@ -8,6 +8,7 @@ import {
   ChevronRight,
   CircleUserRound,
   ClipboardList,
+  Info,
   Layers3,
   LayoutDashboard,
   LogOut,
@@ -15,6 +16,7 @@ import {
   ScanSearch,
   Server,
   ShieldCheck,
+  X,
 } from "lucide-react";
 import {
   api,
@@ -89,6 +91,8 @@ export default function App() {
         const session = await api("/public-demo/session", z.object({ token: z.string(), expires_in: z.number() }), "POST");
         if (current) {
           setToken(session.token, true);
+          setWelcome(true);
+          setTour(false);
           setDemo(true);
           setAppId("demo");
           setExpiry(Date.now() + session.expires_in * 1000);
@@ -334,12 +338,54 @@ export default function App() {
               </button>
             </form>
           </OperatorDialog>
-          {demo && welcome && <div className="notice">
-            Explore this interactive prototype. Services, metrics, logs and incidents are simulated in your private session.
-            <button onClick={() => setTour(!tour)}>{tour ? "Close guide" : "Quick guide"}</button>
-            <button onClick={() => setWelcome(false)}>Dismiss</button>
-            {tour && <p>Open Service details and simulate a failure. Investigate its evidence, prepare and confirm an incident, then resolve it in Incidents.</p>}
-          </div>}
+          {demo && (
+            <div className="demoWelcomeCollapse" data-open={welcome} inert={!welcome}>
+              <div className="demoWelcomeClip">
+                <section className="demoWelcome" aria-labelledby="demo-welcome-title">
+                  <Info className="demoWelcomeInfo" size={20} aria-hidden="true" />
+                  <div className="demoWelcomeContent">
+                    <h2 id="demo-welcome-title">You're exploring the OpsGuard demo</h2>
+                    <p>
+                      This is an isolated workspace with simulated services. Explore
+                      monitoring, trigger failures, investigate with AI and manage
+                      incidents without affecting real applications.
+                    </p>
+                    <div className="demoWelcomeActions">
+                      <button
+                        type="button"
+                        className="demoWelcomePrimary"
+                        aria-expanded={tour}
+                        aria-controls="demo-walkthrough"
+                        onClick={() => setTour(!tour)}
+                      >
+                        Explore the workflow
+                      </button>
+                      <button type="button" onClick={() => setWelcome(false)}>
+                        Dismiss
+                      </button>
+                    </div>
+                    <div id="demo-walkthrough" className="demoWelcomeCollapse" data-open={tour} inert={!tour}>
+                      <div className="demoWelcomeClip">
+                        <p className="demoWelcomeGuide">
+                          Open Service details and simulate a failure. Investigate
+                          its evidence, prepare and confirm an incident, then resolve
+                          it in Incidents.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="demoWelcomeClose"
+                    aria-label="Close demo welcome"
+                    onClick={() => setWelcome(false)}
+                  >
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                </section>
+              </div>
+            </div>
+          )}
           <header className="pageHead">
             <div>
               <h1>

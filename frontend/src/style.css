@@ -212,6 +212,94 @@ main {
   margin: auto;
   padding: 2.5rem clamp(1rem, 3.6vw, 4rem) 4rem;
 }
+.demoWelcomeCollapse {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows 200ms ease, opacity 200ms ease,
+    visibility 200ms;
+}
+.demoWelcomeCollapse[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+}
+.demoWelcomeClip {
+  min-height: 0;
+  overflow: hidden;
+}
+.demoWelcome {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 16px;
+  padding: 16px;
+  background: #131e17;
+  border: 1px solid #304638;
+  border-radius: 10px;
+  color: #a6b4aa;
+}
+.demoWelcomeInfo {
+  color: #4ade80;
+  margin-top: 3px;
+}
+.demoWelcomeContent h2 {
+  padding-inline-end: 24px;
+  margin-bottom: 6px;
+  color: #e5e7eb;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 26px;
+  letter-spacing: normal;
+}
+.demoWelcomeContent > p {
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 26px;
+}
+.demoWelcomeActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 12px;
+}
+.demoWelcome button {
+  padding: 0;
+  color: #a6b4aa;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  transition: color 200ms ease, background-color 200ms ease;
+}
+.demoWelcome button:hover:not(:disabled) {
+  color: #e5e7eb;
+  background: transparent;
+}
+.demoWelcome button.demoWelcomePrimary {
+  padding: 12px 10px;
+  color: #0b100d;
+  background: #4ade80;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.demoWelcome button.demoWelcomePrimary:hover:not(:disabled) {
+  color: #0b100d;
+  background: #86efac;
+}
+.demoWelcome button.demoWelcomeClose {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 24px;
+  height: 24px;
+}
+.demoWelcomeGuide {
+  margin-top: 12px;
+}
 .pageHead,
 .panel header,
 .contextBar,
