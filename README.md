@@ -1,5 +1,10 @@
 # OpsGuard AI
 
+[![OpsGuard CI and release](https://github.com/SKirushanth/opsguard-ai/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/SKirushanth/opsguard-ai/actions/workflows/release.yml)
+
+Pull requests run Python and frontend checks. Main releases use Azure OIDC and the existing Container Apps. See the [production pipeline runbook](docs/pipeline.md) for the data safeguard, WSO2 checkpoint and rollback.
+
+
 OpsGuard brings a service's health, recent logs and performance metrics into one incident investigation. Developers can inspect the evidence, ask a LangGraph agent for a likely cause, and approve a report for the incident history. The built-in application simulates Auth, Orders and Notifications. Registered applications supply their own monitoring data.
 
 ## Architecture
