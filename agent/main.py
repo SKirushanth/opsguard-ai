@@ -34,6 +34,8 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     __package__ = "agent"
 
+from investigation import REFERENCE_FORMAT, Investigation
+
 from .config import load_settings
 from .graph import InvalidModelResponse, build_graph
 from .tools import build_monitoring_tools
@@ -109,7 +111,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                 {"messages": [HumanMessage(content=message)]},
                 config={
                     "recursion_limit": 12,
-                    "configurable": {"service_id": service_id},
+                    "configurable": {"service_id": service_id, "draft": payload.message.startswith("Prepare an incident draft.")},
                 },
             )
         answer = result["messages"][-1].text.strip()
@@ -144,6 +146,10 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
             detail="The agent could not complete the model investigation.",
         ) from exc
 
+    receipt = result["messages"][-1].additional_kwargs.get("investigation")
+    # Use the existing WSO2 chat envelope for both human replies and gateway references.
+    if receipt and payload.context.get("response_format") == REFERENCE_FORMAT:
+        answer = Investigation.model_validate(receipt).model_dump_json()
     return ChatResponse(response=answer)
 
 
