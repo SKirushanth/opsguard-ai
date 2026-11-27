@@ -12,7 +12,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import access, incidents, public_demo, registry, scenarios
+from . import access, demo_ai, incidents, public_demo, registry, scenarios
 from .database import database
 from .routes.chat import router as chat_router
 from .routes.monitoring import router as monitoring_router
@@ -24,6 +24,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.demo_sessions = {}
+    app.state.demo_ai = demo_ai.Budget()
     app.state.agent_chat_url = os.getenv("AGENT_CHAT_URL", "http://127.0.0.1:8000/chat")
     timeout = float(os.getenv("AGENT_CHAT_TIMEOUT_SECONDS", "65"))
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=5.0)) as client:
@@ -44,6 +45,7 @@ app.include_router(public_demo.router)
 app.include_router(scenarios.router)
 app.include_router(registry.router)
 app.include_router(incidents.router)
+app.include_router(demo_ai.router)
 app.include_router(monitoring_router, dependencies=[Depends(access.monitor)])
 app.include_router(chat_router, dependencies=[Depends(access.viewer)])
 

@@ -1,4 +1,4 @@
-﻿"""Black-box checks against the public origin. Never log bodies or credentials."""
+"""Black-box checks against the public origin. Never log bodies or credentials."""
 import os
 import uuid
 from contextlib import contextmanager
@@ -56,8 +56,12 @@ def demo():
     assert {s["id"] for s in check("GET","/services")["services"]} == {"auth","orders","notifications"}
     check("POST","/demo/scenario",data={"service_id":"auth","scenario":"token_validation_failure"})
     q = {"service_id":"auth","session_id":"smoke","message":"Check health"}
-    answer = check("POST","/analysis",data=q)["response"]
-    assert "HTTP 401" in answer and "HTTP 200" in check("POST","/analysis",b,q)["response"]
+    # Previous release has deterministic /analysis but no explicit local route.
+    local_path = "/analysis/local"
+    if client.post(PUBLIC+local_path, headers=a, json=q).status_code == 404:
+        local_path = "/analysis"
+    answer = check("POST",local_path,data=q)["response"]
+    assert "HTTP 401" in answer and "HTTP 200" in check("POST",local_path,b,q)["response"]
     assert check("GET","/services/auth/logs")["logs"] and check("GET","/services/auth/metrics")["metrics"]
     draft=check("POST","/incidents/draft",data=dict(application_id="demo",service_id="auth",session_id="smoke",investigation=answer))
     row=check("POST","/incidents",data=dict(draft,approval_id=str(uuid.uuid4()),confirmed=True))

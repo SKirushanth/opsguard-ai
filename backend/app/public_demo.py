@@ -12,7 +12,7 @@ from time import monotonic
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
-from . import registry, scenarios, services
+from . import demo_ai, registry, scenarios, services
 from .access import digest
 from .models import ServiceHealth
 
@@ -97,32 +97,37 @@ async def activate(payload: scenarios.Scenario, state=Depends(visitor)):
 async def reset(payload: scenarios.Reset, state=Depends(visitor)):
     ids = [payload.service_id] if payload.service_id else list(scenarios.FAILURES)
     if not payload.service_id:
-        state.clear()
+        state.pop("incidents", None)
     for id in ids:
         change(state, id, "healthy")
     return {"service_ids": ids, "status": "healthy"}
 
 
-def evidence(service_id, state):
+def observations(service_id, state):
     if service_id not in scenarios.FAILURES:
         raise HTTPException(422, "Select a simulated service.")
     record, logs, metrics = snapshot(service_id, state)
-    return Evidence.collect(service_id, {
+    return {
         "health": record.model_dump(),
         "logs": {"logs": [entry.model_dump(mode="json") for entry in logs]},
         "metrics": {"metrics": metrics.model_dump()},
-    }, [])
+    }
 
 
 @router.post("/analysis")
-async def analysis(payload: ChatRequest, state=Depends(visitor)):
-    return {"session_id": payload.session_id, "response": evidence(payload.service_id, state).render(None)}
+async def analysis(payload: ChatRequest, request: Request, state=Depends(visitor)):
+    return await demo_ai.investigate(request, payload, state, observations(payload.service_id, state))
+
+
+@router.post("/analysis/local")
+async def local_analysis(payload: ChatRequest, state=Depends(visitor)):
+    return {"session_id": payload.session_id, "mode": "demo", "response": Evidence.collect(payload.service_id, observations(payload.service_id, state), []).render(None)}
 
 
 def draft_for(payload, state):
     if payload.application_id != "demo":
         raise HTTPException(422, "Select the demo application.")
-    report = Report.model_validate(json.loads(evidence(payload.service_id, state).render(None, draft=True)))
+    report = Report.model_validate(json.loads(Evidence.collect(payload.service_id, observations(payload.service_id, state), []).render(None, draft=True)))
     return Draft(application_id="demo", service_id=payload.service_id, **report.model_dump())
 
 

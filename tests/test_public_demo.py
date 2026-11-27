@@ -70,3 +70,42 @@ def test_demo_analysis_and_incident_lifecycle(monkeypatch):
         assert c.get(BASE + "/incidents", headers=b).json() == []
         c.post(BASE + "/demo/reset", json={}, headers=a)
         assert c.get(BASE + "/incidents", headers=a).json() == []
+
+def test_hosted_demo_reads_snapshot_and_enforces_quota(monkeypatch):
+    import httpx
+    import json
+
+    monkeypatch.setenv("PROTECT_READS", "true")
+    monkeypatch.setenv("MONITORING_API_KEY", "test-monitor")
+    monkeypatch.setenv("AGENT_API_KEY", "test-invoke")
+    monkeypatch.setenv("AGENT_CHAT_URL", "https://agent.invalid/chat")
+    aliases = []
+
+    async def host(req):
+        payload = json.loads(req.content)
+        alias = payload["context"]["service_id"]
+        aliases.append(alias)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://local") as tools:
+            path = f"/api/services/{alias}/health"
+            assert (await tools.get(path)).status_code == 401
+            result = await tools.get(path, headers={"X-Monitoring-Key":"test-monitor"})
+            assert result.json()["service_id"] == alias and result.json()["http_status"] == 401
+        return httpx.Response(200,json={"response":json.dumps({"service_id":alias,"resources":["health"],
+            "selection":{"observations":["health.http"],"hypotheses":[]}})})
+
+    with TestClient(app) as c:
+        monkeypatch.setattr(app.state, "agent_client", httpx.AsyncClient(transport=httpx.MockTransport(host)))
+        h = {"Authorization":"Bearer "+c.post(BASE+"/session").json()["token"]}
+        scenario = {"service_id":"auth","scenario":"token_validation_failure"}
+        query = {"service_id":"auth","session_id":"visitor","message":"Investigate health"}
+        for _ in range(3):
+            c.post(BASE+"/demo/scenario",headers=h,json=scenario)
+            reply=c.post(BASE+"/analysis",headers=h,json=query).json()
+            assert reply["mode"]=="live" and "HTTP 401" in reply["response"]
+            assert c.get("/api/services/"+aliases[-1]+"/health",headers={"X-Monitoring-Key":"test-monitor"}).status_code==404
+            c.post(BASE+"/demo/reset",headers=h,json={})
+        assert c.post(BASE+"/analysis",headers=h,json=query).json()["mode"]=="demo"
+        app.state.demo_ai.limit=3
+        other={"Authorization":"Bearer "+c.post(BASE+"/session").json()["token"]}
+        assert c.post(BASE+"/analysis",headers=other,json=query).json()["mode"]=="demo"
+        assert len(aliases)==3

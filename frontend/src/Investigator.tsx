@@ -51,7 +51,7 @@ export function Investigator({
 }) {
   const [session] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; body: string }[]
+    { role: "user" | "assistant"; body: string; mode?: "demo" | "live" }[]
   >([]);
   const [input, setInput] = useState(""),
     [busy, setBusy] = useState(""),
@@ -79,7 +79,7 @@ export function Investigator({
         session_id: session,
         service_id: service.id,
       });
-      setMessages((m) => [...m, { role: "assistant", body: reply.response }]);
+      setMessages((m) => [...m, { role: "assistant", body: reply.response, mode: reply.mode }]);
     } catch (e) {
       setError(errorText(e));
       setInput(message);
@@ -139,7 +139,7 @@ export function Investigator({
       {!messages.length && (
         <div className="empty">
           <h3>Investigate {service.name}</h3>
-          <p>{demo ? "Review a deterministic summary of this service?s current simulated evidence." : "Ask about health, recent logs or performance."}</p>
+          <p>{demo ? "Investigate your simulated service with live AI when available. Demo analysis summarizes its evidence when live AI is unavailable." : "Ask about health, recent logs or performance."}</p>
           <div className="suggestions">
             {suggestions.map((s) => (
               <button key={s} onClick={() => send(s)}>
@@ -154,7 +154,7 @@ export function Investigator({
           <article className="message" key={i}>
             <h4>
               {m.role === "user" ? <UserRound /> : <Bot />}
-              {m.role === "user" ? "You" : demo ? "Demo analysis" : "OpsGuard AI"}
+              {m.role === "user" ? "You" : demo ? (m.mode === "live" ? "Live AI investigation" : "Demo analysis") : "OpsGuard AI"}
             </h4>
             {m.role === "assistant" ? (
               <Markdown
