@@ -30,3 +30,18 @@ For manual restoration, identify the baseline revision and digest from the faile
     az containerapp revision list -g opsguard-rg -n APP --query "[?properties.active].{revision:name,health:properties.healthState,traffic:properties.trafficWeight}" -o table
 
 Confirm Healthy at 100% and dispatch the verification workflow after correcting the main branch (dispatch reconciles to main). Never set traffic weights in Single mode. If OIDC fails, compare the exact subject, environment branch rule, tenant and client ID. For registry or ARM 403s check resource-level role assignments and propagation. For a blocked agent release inspect the hosted trace and update the attestation only after testing. For a failed readiness check inspect Container Apps system logs. Keep credentials and unredacted application logs out of Actions outputs.
+
+### Verify the conversational agent before attestation
+
+Deploy the intended Git commit to the serving WSO2 environment, then run from the repository root:
+
+    .\deploy\pipeline\verify-wso2.ps1 -AgentChatUrl '<exact HTTPS Chat invocation URL used by Azure>'
+
+The script makes one investigation, reads the invocation key without echoing it, and checks the structured response for successful health, logs, and metrics reads and a conversational selection. Check the WSO2 trace or runtime logs at the printed timestamp for three matching monitoring_tool_succeeded events. For actual HTTP failures, monitoring_tool_failed includes the resource and status without exposing URL parameters, credentials or evidence. The monitoring base URL on WSO2 is the public Azure frontend origin without /api. Match the WSO2 MONITORING_API_KEY to the Azure backend monitoring credential. The invocation key is a separate credential.
+
+Once the serving commit and successful response are verified, from an authenticated GitHub CLI run:
+
+    gh variable set WSO2_VERIFIED_SHA --repo SKirushanth/opsguard-ai --body <verified-full-commit-sha>
+    gh workflow run release.yml --repo SKirushanth/opsguard-ai --ref main
+
+The workflow applies any compatible Azure image changes with the existing data guard. These commands can also be performed in GitHub Actions settings and the Run workflow menu.

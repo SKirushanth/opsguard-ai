@@ -108,3 +108,4 @@ class AgentReply(BaseModel):
 class ChatResponse(AgentReply):
     session_id: SessionID
     evidence: list[dict[str, str]] | None = None
+    mode: Literal["live", "monitoring"] | None = None

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from typing import Annotated
 
@@ -13,6 +14,7 @@ from ..services import FixtureError, ServiceNotFound
 from . import monitoring
 
 router = APIRouter(prefix="/api", tags=["chat"])
+logger = logging.getLogger("uvicorn.error").getChild("operator_ai")
 
 
 def get_agent_client(request: Request) -> httpx.AsyncClient:
@@ -55,7 +57,7 @@ def investigation_context(payload: ChatRequest, service_id: str | None, *, draft
     context = {"response_format": REFERENCE_FORMAT}
     if service_id:
         context["service_id"] = service_id
-    if payload.conversational and not draft:
+    if (payload.conversational or service_id) and not draft:
         context.update(answer_format=CONVERSATIONAL_FORMAT, previous_questions=payload.previous_questions)
     return context
 
@@ -112,5 +114,13 @@ async def query_agent(
         raise HTTPException(502, "The agent returned evidence for a different service.")
     evidence = await verified_evidence(receipt)
     if payload.conversational and not draft:
-        return ChatResponse(session_id=payload.session_id, **evidence.conversation(receipt.selection, payload.message))
+        selection = receipt.selection
+        if selection is None or not evidence.accepts(selection):
+            reason = "missing_selection" if selection is None else "unsupported_references"
+            logger.info("operator_ai_fallback reason=%s", reason)
+            selection = None
+        return ChatResponse(
+            session_id=payload.session_id, mode="live" if selection else "monitoring",
+            **evidence.conversation(selection, payload.message),
+        )
     return ChatResponse(response=evidence.render(receipt.selection, draft=draft), session_id=payload.session_id)

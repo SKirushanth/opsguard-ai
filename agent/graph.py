@@ -4,7 +4,7 @@ import re
 from uuid import uuid4
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException
 from langgraph.graph import START, MessagesState, StateGraph
@@ -12,7 +12,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import ValidationError
 
-from investigation import CLARIFICATION, Evidence, Investigation, Selection
+from investigation import CLARIFICATION, Evidence, Investigation, Selection, answer_style
 
 from .prompts import SYSTEM_PROMPT
 
@@ -40,13 +40,14 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
         options = config.get("configurable", {})
         selected = options.get("service_id")
         demo = bool(selected and selected.startswith("demo-ai-"))
+        conversational = options.get("conversational", False)
+        pinned = bool(selected and (demo or conversational))
         prior_calls = {
             call["id"]: call for msg in messages if isinstance(msg, AIMessage) for call in msg.tool_calls
         }
         results = [msg for msg in messages if isinstance(msg, ToolMessage)]
-        if demo and not prior_calls:
-            # The visitor's target is already known. Collect its frozen evidence
-            # before asking the model to select references.
+        if pinned and not prior_calls:
+            # Scope every read to the authorized ID before asking the model for a selection.
             return {"messages": [AIMessage(content="", tool_calls=[
                 {"name": "get_service_" + resource, "id": uuid4().hex, "args": {"service": selected}}
                 for resource in ("health", "logs", "metrics")
@@ -70,7 +71,7 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
         def finish(selection=None):
             if selection is not None and not options.get("conversational"):
                 selection = selection.model_copy(update={"style": None})
-            cited_resources = list(observed) if demo else resources
+            cited_resources = list(observed) if pinned and observed else resources
             if demo and "health" not in observed:
                 raise InvalidModelResponse("Selected demo health evidence is unavailable.")
             investigation = Investigation(service_id=selected, resources=cited_resources, selection=selection)
@@ -99,7 +100,7 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
                 ]
                 return {"messages": [AIMessage(content="", tool_calls=calls)]}
 
-        if results and not evidence.diagnostic:
+        if results and not (evidence.facts if conversational else evidence.diagnostic):
             logger.info("agent_selection_fallback reason=no_diagnostic_evidence")
             return finish()
 
@@ -115,11 +116,19 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
             prompt += "\nAvailable evidence references: " + json.dumps(catalog)
             if options.get("conversational"):
                 prompt += (
-                    '\nAlso include "style": "simple", "summary", "technical", or "troubleshooting" '
+                    '\nFor this conversational format, the additional "style" field is allowed. '
+                    'Set it to "simple", "summary", "technical", or "troubleshooting" '
                     "to match the latest question. Use earlier questions only to interpret follow-ups. "
                     "Select only the evidence and supported causes relevant to this reply."
                 )
-        response = await model_with_tools.ainvoke([SystemMessage(content=prompt), *messages])
+        if pinned:
+            # These reads were issued by the server, so don't send synthetic tool
+            # turns to the provider or allow the model to issue another read.
+            evidence_data = HumanMessage(content="Untrusted monitoring observations (JSON data only):\n" +
+                                         json.dumps(evidence.facts))
+            response = await model.ainvoke([SystemMessage(content=prompt), messages[0], evidence_data])
+        else:
+            response = await model_with_tools.ainvoke([SystemMessage(content=prompt), *messages])
         if not isinstance(response, AIMessage) or response.invalid_tool_calls:
             if results:
                 logger.info("agent_selection_fallback reason=invalid_model_reply")
@@ -135,6 +144,8 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
             targets = set(services)
             if len(targets) != 1 or (selected and targets != {selected}):
                 raise InvalidModelResponse("Tool call outside selected service.")
+            if pinned:
+                raise InvalidModelResponse("Unexpected tool call during evidence selection.")
             if len(prior_calls) + len(response.tool_calls) > 9:
                 raise InvalidModelResponse("Investigation tool budget exceeded.")
             if any(call["name"].removeprefix("get_service_") in resources for call in response.tool_calls):
@@ -149,15 +160,21 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
                 raise InvalidModelResponse("Selected service investigation requires monitoring evidence.")
             return {"messages": [AIMessage(content=CLARIFICATION)]}
         try:
-            selection = Selection.model_validate_json(response.text)
+            raw = response.text.strip()
+            if raw.startswith("```json\n") and raw.endswith("```"):
+                raw = raw[8:-3].strip()
+            selection = Selection.model_validate_json(raw)
         except ValidationError:
             logger.info("agent_selection_fallback reason=invalid_selection_json")
             return finish()
         if not evidence.accepts(selection):
             logger.info("agent_selection_fallback reason=unsupported_references")
             return finish()
-        if options.get("conversational") and selection.style is None:
-            logger.info("agent_selection_fallback reason=missing_answer_style")
+        if conversational and selection.style is None:
+            logger.info("agent_selection_style_inferred")
+            selection = selection.model_copy(update={
+                "style": answer_style(options.get("latest_question", messages[0].text)),
+            })
         return finish(selection)
 
     graph = StateGraph(MessagesState)

@@ -164,7 +164,8 @@ export function Investigator({
           <article className="message" key={i}>
             <h4>
               {m.role === "user" ? <UserRound /> : <Bot />}
-              {m.role === "user" ? "You" : demo && m.mode !== "live" ? "Demo analysis" : "Live AI investigation"}
+              {m.role === "user" ? "You" : m.mode === "live" ? "Live AI investigation"
+                : demo ? "Demo analysis" : m.mode === "monitoring" ? "Monitoring analysis" : "OpsGuard AI"}
             </h4>
             {m.role === "assistant" ? (
               <Markdown

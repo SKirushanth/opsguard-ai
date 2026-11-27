@@ -137,6 +137,7 @@ async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
                         "service_id": service_id,
                         "draft": payload.message.startswith("Prepare an incident draft."),
                         "conversational": conversational,
+                        "latest_question": payload.message,
                     },
                 },
             )

@@ -18,6 +18,19 @@ Cause = Literal["pool_saturation", "connection_refused", "smtp_timeout", "token_
 AnswerStyle = Literal["simple", "summary", "technical", "troubleshooting"]
 
 
+def answer_style(question: str) -> AnswerStyle:
+    terms = question.lower()
+    if any(term in terms for term in ("fix", "troubleshoot", "recommend", "next step", "what should", "what can", "check next")):
+        return "troubleshooting"
+    if any(term in terms for term in ("simple", "plain english", "plain language")):
+        return "simple"
+    if any(term in terms for term in ("summary", "summarize", "brief", "tldr")):
+        return "summary"
+    if any(term in terms for term in ("technical", "detail", "metric", "logs")):
+        return "technical"
+    return "simple"
+
+
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -145,15 +158,7 @@ class Evidence:
         """Render only server-verified facts and supported explanations."""
         if selection is not None and not self.accepts(selection):
             selection = None
-        style = selection.style if selection else None
-        if style is None:
-            terms = question.lower()
-            if any(term in terms for term in ("fix", "troubleshoot", "recommend", "next step", "what should", "what can")):
-                style = "troubleshooting"
-            elif any(term in terms for term in ("technical", "detail", "metric", "logs")):
-                style = "technical"
-            else:
-                style = "simple"
+        style = (selection.style if selection else None) or answer_style(question)
 
         refs = list(dict.fromkeys(selection.observations)) if selection else list(self.facts)[:8]
         hypotheses = selection.hypotheses if selection else []
@@ -165,10 +170,13 @@ class Evidence:
         if self.needs_mapping:
             health += " A custom health mapping is needed to interpret the check."
         parts = [health]
-        if style == "technical":
+        if style in ("technical", "summary"):
             findings = [self.facts[ref] for ref in refs if not ref.startswith("log.")][:3]
             if findings:
-                parts.append("**Confirmed observations**\n\n" + "\n".join(f"- {fact}" for fact in findings))
+                if style == "summary":
+                    parts.append(f"One key observation: {findings[0]}.")
+                else:
+                    parts.append("**Confirmed observations**\n\n" + "\n".join(f"- {fact}" for fact in findings))
         causes = list(dict.fromkeys(CAUSES[h.cause][0] for h in hypotheses))
         if causes:
             parts.append("**Possible cause**\n\n" + " ".join(causes[:1] if style in ("simple", "summary") else causes))

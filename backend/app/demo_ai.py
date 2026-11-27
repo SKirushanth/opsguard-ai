@@ -29,12 +29,17 @@ class Budget:
         now = monotonic()
         while self.calls and now - self.calls[0][0] >= 86400:
             self.calls.popleft()
-        if (len(self.active) >= 2 or len(self.calls) >= self.limit or
-                session.get("ai_calls", 0) >= 3 or sum(ip == client for _, ip in self.calls) >= 9):
-            return False
+        if len(self.active) >= 2:
+            return "concurrency_limit"
+        if len(self.calls) >= self.limit:
+            return "global_daily_limit" if self.limit else "live_ai_disabled"
+        if session.get("ai_calls", 0) >= 3:
+            return "session_limit"
+        if sum(ip == client for _, ip in self.calls) >= 9:
+            return "client_daily_limit"
         self.calls.append((now, client))
         session["ai_calls"] = session.get("ai_calls", 0) + 1
-        return True
+        return None
 
 
 @router.get("/demo-ai-{snapshot_id}/{resource}")
@@ -68,11 +73,16 @@ async def investigate(request, payload, session, observations):
     key = os.getenv("AGENT_API_KEY")
     url = request.app.state.agent_chat_url
     budget = request.app.state.demo_ai
-    if not (key and url.startswith("https://") and os.getenv("MONITORING_API_KEY")):
-        return fallback("agent_configuration_incomplete")
+    if not key:
+        return fallback("missing_agent_invocation_key")
+    if not url.startswith("https://"):
+        return fallback("agent_url_requires_https")
+    if not os.getenv("MONITORING_API_KEY"):
+        return fallback("missing_monitoring_key")
     # Use the transport peer, never a visitor-supplied forwarding header.
-    if not budget.reserve(session, request.client.host if request.client else "unknown"):
-        return fallback("usage_limit")
+    limit_reason = budget.reserve(session, request.client.host if request.client else "unknown")
+    if limit_reason:
+        return fallback(limit_reason)
     alias = "demo-ai-" + secrets.token_hex(12)
     reads = []
     budget.active[alias] = observations, reads
@@ -86,7 +96,9 @@ async def investigate(request, payload, session, observations):
         receipt = Investigation.model_validate_json(reply.json()["response"])
         if receipt.service_id != alias:
             return fallback("wrong_service")
-        if "health" not in reads or not set(receipt.resources).issubset(reads):
+        if "health" not in reads:
+            return fallback("missing_health_read")
+        if not set(receipt.resources).issubset(reads):
             return fallback("unverified_tool_reads")
         verified = Evidence.collect(payload.service_id, {r: observations[r] for r in receipt.resources}, [])
         if not receipt.selection:

@@ -276,7 +276,8 @@ async def test_selected_demo_investigation_uses_only_its_snapshot(override):
         assert f"Server-selected monitoring service ID: {alias}" in messages[0].text
         assert "Why is Order Service failing?" in messages[1].text
         assert "Earlier questions for context" in messages[1].text
-        assert len([msg for msg in messages if isinstance(msg, ToolMessage)]) == 3
+        assert not any(isinstance(msg, ToolMessage) for msg in messages)
+        assert "100/100 connections" in messages[-1].text
         if override:
             return AIMessage(content="", tool_calls=[
                 {"name": "get_service_health", "id": "override", "args": {"service": override}},
@@ -336,17 +337,13 @@ async def test_conversational_diagnosis_reads_logs_after_health_error(valid_sele
         return httpx.Response(200, json={"service_id": service, **data[resource]})
 
     def reply(messages):
-        results = [msg for msg in messages if isinstance(msg, ToolMessage)]
-        if not results:
-            return AIMessage(content="", tool_calls=[{
-                "name": "get_service_health", "id": "health", "args": {"service": "orders"},
-            }])
-        assert len(results) == 3
-        return AIMessage(content=json.dumps({
+        assert not any(isinstance(msg, ToolMessage) for msg in messages)
+        assert "100/100 connections" in messages[-1].text
+        assert "health.http" not in messages[-1].text
+        return AIMessage(content=("```json\n" + json.dumps({
             "observations": ["metrics.pool"],
             "hypotheses": [{"cause": "pool_saturation", "evidence": "metrics.pool"}],
-            "style": "troubleshooting",
-        }) if valid_selection else "Unstructured provider output.")
+        }) + "\n```") if valid_selection else "Unstructured provider output.")
 
     async with (
         agent_app.router.lifespan_context(agent_app),
@@ -366,10 +363,52 @@ async def test_conversational_diagnosis_reads_logs_after_health_error(valid_sele
         })
 
     assert response.status_code == 200
-    assert reads[0] == "health" and sorted(reads) == ["health", "logs", "metrics"]
+    assert sorted(reads) == ["health", "logs", "metrics"]
     receipt = json.loads(response.json()["response"])
-    assert sorted(receipt["resources"]) == sorted(reads)
+    assert sorted(receipt["resources"]) == ["logs", "metrics"]
     if valid_selection:
         assert receipt["selection"]["style"] == "troubleshooting"
     else:
         assert receipt["selection"] is None
+
+
+@pytest.mark.usefixtures("model_disabled")
+@pytest.mark.anyio
+async def test_demo_conversation_through_backend_and_agent(monkeypatch):
+    monkeypatch.setenv("PROTECT_READS", "true")
+    monkeypatch.setenv("AGENT_CHAT_URL", "https://agent.example.test/chat")
+    monkeypatch.setenv("AGENT_API_KEY", "test-invoke")
+    monkeypatch.setenv("MONITORING_API_KEY", "test-monitor")
+
+    def reply(messages):
+        assert "What should I check next?" in messages[1].text
+        assert "Why are orders failing?" in messages[1].text
+        assert "100/100 connections" in messages[-1].text
+        return AIMessage(content=json.dumps({
+            "observations": ["metrics.pool"], "style": "troubleshooting",
+            "hypotheses": [{"cause": "pool_saturation", "evidence": "metrics.pool"}],
+        }))
+
+    async with (
+        backend_app.router.lifespan_context(backend_app),
+        agent_app.router.lifespan_context(agent_app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=agent_app), base_url="https://agent.example.test") as agent,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=backend_app), base_url="http://monitoring") as gateway,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=backend_app), base_url="http://monitoring",
+                          headers={"X-Monitoring-Key": "test-monitor"}) as monitoring,
+    ):
+        agent_app.state.investigation_graph = build_graph(ScriptedModel(reply=reply), build_monitoring_tools(monitoring))
+        backend_app.state.agent_client = agent
+        credentials = await gateway.post("/api/public-demo/session")
+        headers = {"Authorization": "Bearer " + credentials.json()["token"]}
+        response = await gateway.post("/api/public-demo/analysis", headers=headers, json={
+            **PAYLOAD, "service_id": "orders", "message": "What should I check next?",
+            "conversational": True, "previous_questions": ["Why are orders failing?"],
+        })
+
+    assert response.status_code == 200
+    answer = response.json()
+    assert answer["mode"] == "live"
+    assert "Possible cause" in answer["response"] and "What to check next" in answer["response"]
+    assert [item["reference"] for item in answer["evidence"]] == ["metrics.pool"]
+    assert not backend_app.state.demo_ai.active
