@@ -315,3 +315,61 @@ async def test_selected_demo_investigation_uses_only_its_snapshot(override):
     assert receipt["selection"]["hypotheses"] == [
         {"cause": "pool_saturation", "evidence": "metrics.pool"},
     ]
+
+
+@pytest.mark.usefixtures("model_disabled")
+@pytest.mark.anyio
+@pytest.mark.parametrize("valid_selection", [True, False])
+async def test_conversational_diagnosis_reads_logs_after_health_error(valid_selection):
+    reads = []
+
+    def monitor(request):
+        service, resource = request.url.path.split("/")[-2:]
+        assert service == "orders"
+        reads.append(resource)
+        if resource == "health":
+            return httpx.Response(503)
+        data = {
+            "logs": {"logs": [{"level": "ERROR", "message": "Database pool exhausted"}]},
+            "metrics": {"metrics": {"active_db_connections": 100, "db_connection_limit": 100}},
+        }
+        return httpx.Response(200, json={"service_id": service, **data[resource]})
+
+    def reply(messages):
+        results = [msg for msg in messages if isinstance(msg, ToolMessage)]
+        if not results:
+            return AIMessage(content="", tool_calls=[{
+                "name": "get_service_health", "id": "health", "args": {"service": "orders"},
+            }])
+        assert len(results) == 3
+        return AIMessage(content=json.dumps({
+            "observations": ["metrics.pool"],
+            "hypotheses": [{"cause": "pool_saturation", "evidence": "metrics.pool"}],
+            "style": "troubleshooting",
+        }) if valid_selection else "Unstructured provider output.")
+
+    async with (
+        agent_app.router.lifespan_context(agent_app),
+        httpx.AsyncClient(transport=httpx.MockTransport(monitor), base_url="http://monitoring") as monitoring,
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=agent_app), base_url="http://agent") as client,
+    ):
+        agent_app.state.investigation_graph = build_graph(
+            ScriptedModel(reply=reply), build_monitoring_tools(monitoring)
+        )
+        response = await client.post("/chat", json={
+            **PAYLOAD,
+            "message": "Use the Orders logs and metrics to explain the likely cause and recommend what to check next.",
+            "context": {
+                "service_id": "orders", "response_format": "monitoring-references-v1",
+                "answer_format": "conversational-v1",
+            },
+        })
+
+    assert response.status_code == 200
+    assert reads[0] == "health" and sorted(reads) == ["health", "logs", "metrics"]
+    receipt = json.loads(response.json()["response"])
+    assert sorted(receipt["resources"]) == sorted(reads)
+    if valid_selection:
+        assert receipt["selection"]["style"] == "troubleshooting"
+    else:
+        assert receipt["selection"] is None

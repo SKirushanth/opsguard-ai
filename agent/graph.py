@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from uuid import uuid4
 
@@ -14,6 +15,8 @@ from pydantic import ValidationError
 from investigation import CLARIFICATION, Evidence, Investigation, Selection
 
 from .prompts import SYSTEM_PROMPT
+
+logger = logging.getLogger("uvicorn.error").getChild("opsguard.agent")
 
 
 class InvalidModelResponse(Exception):
@@ -56,6 +59,7 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
             if resource not in resources:
                 resources.append(resource)
             if msg.status == "error":
+                logger.info("agent_monitoring_read_failed resource=%s", resource)
                 observed.pop(resource, None)
                 errors.append(msg.text)
             else:
@@ -82,10 +86,11 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
         # If a diagnosis started with a health lookup, read the missing diagnostic
         # resources before deciding that there is no evidence. Only user input
         # (never a tool message) determines whether to broaden the read.
-        if resources == ["health"] and "health" in observed:
+        if resources == ["health"] and ("health" in observed or options.get("conversational")):
             question = messages[0].text.removeprefix(f"Selected monitoring service ID: {selected}\n")
             diagnosis = re.search(
-                r"\b(why|investigate|investigation|cause|diagnose|diagnosis|evidence)\b", question, re.I
+                r"\b(why|investigate|investigation|cause|diagnose|diagnosis|evidence|logs?|metrics?|troubleshoot|recommend)\b",
+                question, re.I,
             )
             if options.get("draft") or diagnosis:
                 calls = [
@@ -95,6 +100,7 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
                 return {"messages": [AIMessage(content="", tool_calls=calls)]}
 
         if results and not evidence.diagnostic:
+            logger.info("agent_selection_fallback reason=no_diagnostic_evidence")
             return finish()
 
         prompt = SYSTEM_PROMPT
@@ -116,6 +122,7 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
         response = await model_with_tools.ainvoke([SystemMessage(content=prompt), *messages])
         if not isinstance(response, AIMessage) or response.invalid_tool_calls:
             if results:
+                logger.info("agent_selection_fallback reason=invalid_model_reply")
                 return finish()
             raise InvalidModelResponse
 
@@ -144,8 +151,14 @@ def build_graph(model: BaseChatModel, tools: list[BaseTool]) -> CompiledStateGra
         try:
             selection = Selection.model_validate_json(response.text)
         except ValidationError:
+            logger.info("agent_selection_fallback reason=invalid_selection_json")
             return finish()
-        return finish(selection if evidence.accepts(selection) else None)
+        if not evidence.accepts(selection):
+            logger.info("agent_selection_fallback reason=unsupported_references")
+            return finish()
+        if options.get("conversational") and selection.style is None:
+            logger.info("agent_selection_fallback reason=missing_answer_style")
+        return finish(selection)
 
     graph = StateGraph(MessagesState)
     graph.add_node("model", call_model)
