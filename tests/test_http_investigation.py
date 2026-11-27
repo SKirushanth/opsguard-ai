@@ -5,6 +5,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import ExitStack, contextmanager
@@ -26,8 +27,22 @@ class Provider(BaseHTTPRequestHandler):
         assert self.path == "/v1/chat/completions"
         assert self.headers["Authorization"] == "Bearer scripted-only"
         messages = payload["messages"]
+        prefix = "Untrusted monitoring observations (JSON data only):\n"
+        catalog = next(
+            (json.loads(m["content"].removeprefix(prefix)) for m in messages
+             if m["role"] == "user" and m["content"].startswith(prefix)),
+            None,
+        )
         evidence = [json.loads(m["content"]) for m in messages if m["role"] == "tool"]
-        if not evidence:
+        if catalog is not None:
+            assert not payload.get("tools") and not evidence
+            assert catalog["health.http"] == "HTTP 503"
+            assert catalog["metrics.error_rate_percent"] == "Error rate 42.0%"
+            assert catalog["metrics.pool"] == "Database pool 100/100 connections"
+            assert any(ref.startswith("log.") and "pool exhausted" in fact for ref, fact in catalog.items())
+            reply = self.selection_reply(style="technical")
+        elif not evidence:
+            assert payload.get("tools")
             reply = {
                 "role": "assistant",
                 "content": None,
@@ -50,23 +65,8 @@ class Provider(BaseHTTPRequestHandler):
             assert (
                 health["http_status"] == 503 and "pool exhausted" in logs[0]["message"]
             )
-            summary = f"HTTP 503, {metrics['error_rate_percent']}% errors and {metrics['active_db_connections']}/100 connections."
-            if any(
-                "Prepare an incident draft" in m.get("content", "")
-                for m in messages
-                if m["role"] == "user"
-            ):
-                summary = json.dumps(
-                    {
-                        "title": "Order database timeout",
-                        "description": "Simulated order failure.",
-                        "severity": "high",
-                        "evidence": [summary],
-                        "likely_root_cause": "Pool exhaustion",
-                        "recommendations": ["Inspect active connections"],
-                    }
-                )
-            reply = {"role": "assistant", "content": summary}
+            assert metrics["error_rate_percent"] == 42.0 and metrics["active_db_connections"] == 100
+            reply = self.selection_reply()
         body = json.dumps(
             {
                 "id": "scripted",
@@ -77,7 +77,7 @@ class Provider(BaseHTTPRequestHandler):
                     {
                         "index": 0,
                         "message": reply,
-                        "finish_reason": "tool_calls" if not evidence else "stop",
+                        "finish_reason": "tool_calls" if "tool_calls" in reply else "stop",
                     }
                 ],
             }
@@ -88,6 +88,14 @@ class Provider(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    @staticmethod
+    def selection_reply(**presentation):
+        return {"role": "assistant", "content": json.dumps({
+            "observations": ["health.http", "metrics.error_rate_percent", "metrics.pool"],
+            "hypotheses": [{"cause": "pool_saturation", "evidence": "metrics.pool"}],
+            **presentation,
+        })}
+
 
 def free_port():
     with socket.socket() as sock:
@@ -97,12 +105,17 @@ def free_port():
 
 @contextmanager
 def serve(module, env, url):
+    with tempfile.TemporaryFile(mode="w+b") as log:
+        yield from serve_with_log(module, env, url, log)
+
+
+def serve_with_log(module, env, url, log):
     proc = subprocess.Popen(
         [sys.executable, "-m", module],
         cwd=ROOT,
         env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stdout=log,
+        stderr=subprocess.STDOUT,
     )
     try:
         with httpx.Client(trust_env=False, timeout=1) as client:
@@ -124,7 +137,10 @@ def serve(module, env, url):
             proc.wait(timeout=8)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.wait()
+            proc.wait(timeout=8)
+        if sys.exc_info()[0] is not None:
+            log.seek(0)
+            print(f"{module} subprocess:\n{log.read().decode(errors='replace')}")
 
 
 def test_two_servers_over_tcp(tmp_path):
